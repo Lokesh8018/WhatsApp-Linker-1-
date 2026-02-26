@@ -817,30 +817,6 @@
     <!-- Notifications Container -->
     <div class="notifications" id="notifications"></div>
     
-    <!-- Login Modal -->
-    <div id="loginModal" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle" style="display:flex;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
-        <div style="background:#fff;border-radius:12px;padding:2.5rem 2rem;width:100%;max-width:380px;box-shadow:0 8px 32px rgba(0,0,0,0.25);">
-            <h2 id="loginModalTitle" style="margin:0 0 1.5rem;text-align:center;color:#1e3a8a;font-size:1.3rem;">WhatsApp Linker &mdash; Admin Login</h2>
-            <div id="loginError" role="alert" aria-live="polite" style="display:none;margin-bottom:1rem;padding:0.6rem 1rem;background:#fee2e2;color:#b91c1c;border-radius:6px;font-size:0.9rem;"></div>
-            <div style="margin-bottom:1rem;">
-                <label for="loginUsername" style="display:block;margin-bottom:0.3rem;font-weight:600;color:#374151;font-size:0.9rem;">Username</label>
-                <input id="loginUsername" type="text" autocomplete="username" placeholder="Username" aria-required="true"
-                    style="width:100%;padding:0.6rem 0.8rem;border:1px solid #d1d5db;border-radius:6px;font-size:1rem;box-sizing:border-box;"
-                    onkeydown="if(event.key==='Enter')handleLogin()">
-            </div>
-            <div style="margin-bottom:1.5rem;">
-                <label for="loginPassword" style="display:block;margin-bottom:0.3rem;font-weight:600;color:#374151;font-size:0.9rem;">Password</label>
-                <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Password" aria-required="true"
-                    style="width:100%;padding:0.6rem 0.8rem;border:1px solid #d1d5db;border-radius:6px;font-size:1rem;box-sizing:border-box;"
-                    onkeydown="if(event.key==='Enter')handleLogin()">
-            </div>
-            <button onclick="handleLogin()"
-                style="width:100%;padding:0.75rem;background:#1e40af;color:#fff;border:none;border-radius:6px;font-size:1rem;font-weight:600;cursor:pointer;">
-                Login
-            </button>
-        </div>
-    </div>
-
     <!-- Sidebar -->
     <nav class="sidebar" id="sidebar">
         <div class="sidebar-header">
@@ -1704,90 +1680,6 @@
     </main>
 
     <script>
-        // ── Auth credentials (stored in memory only) ──────────────────────────────
-        let _authCredentials = null; // base64 encoded "user:pass"
-
-        function getCredentials() {
-            return _authCredentials;
-        }
-
-        function setCredentials(user, pass) {
-            _authCredentials = btoa(user + ':' + pass);
-        }
-
-        function showLoginModal(errorMsg) {
-            const modal = document.getElementById('loginModal');
-            if (modal) modal.style.display = 'flex';
-            const errEl = document.getElementById('loginError');
-            if (errEl) {
-                if (errorMsg) {
-                    errEl.textContent = errorMsg;
-                    errEl.style.display = 'block';
-                } else {
-                    errEl.style.display = 'none';
-                }
-            }
-        }
-
-        function hideLoginModal() {
-            const modal = document.getElementById('loginModal');
-            if (modal) modal.style.display = 'none';
-        }
-
-        async function handleLogin() {
-            const user = document.getElementById('loginUsername').value.trim();
-            const pass = document.getElementById('loginPassword').value;
-            if (!user || !pass) {
-                showLoginModal('Please enter both username and password.');
-                return;
-            }
-            setCredentials(user, pass);
-            // Verify credentials against the API
-            try {
-                const resp = await fetch('/api/info', {
-                    headers: { 'Authorization': 'Basic ' + _authCredentials }
-                });
-                if (resp.status === 401) {
-                    _authCredentials = null;
-                    showLoginModal('Invalid credentials. Please try again.');
-                    return;
-                }
-            } catch (e) {
-                // Network error during credential check — inform the user but allow retry
-                showLoginModal('Network error. Please check your connection and try again.');
-                return;
-            }
-            hideLoginModal();
-            loadInitialData();
-        }
-
-        async function fetchWithAuth(url, options = {}) {
-            if (!_authCredentials) {
-                showLoginModal();
-                throw new Error('Not authenticated');
-            }
-
-            const headers = {
-                'Authorization': 'Basic ' + _authCredentials,
-                ...(options.headers || {})
-            };
-
-            // Only set Content-Type for JSON bodies if not already specified in options
-            if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
-                headers['Content-Type'] = 'application/json';
-            }
-
-            const response = await fetch(url, { ...options, headers });
-
-            if (response.status === 401) {
-                _authCredentials = null;
-                showLoginModal('Invalid credentials. Please try again.');
-                throw new Error('Unauthorized');
-            }
-
-            return response;
-        }
-
         // Global variables
         let currentPage = 'dashboard';
         let devices = [];
@@ -1798,7 +1690,7 @@
         document.addEventListener('DOMContentLoaded', function() {
             initializeDashboard();
             setupEventListeners();
-            showLoginModal();
+            loadInitialData();
             startRealTimeUpdates();
         });
         
@@ -2811,6 +2703,17 @@ Active: ${device.isActive ? 'Yes' : 'No'}
             return text.replace(/[&<>"']/g, m => map[m]);
         }
         
+        async function fetchWithAuth(url, options = {}) {
+            const defaultOptions = {
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...options.headers
+                },
+                ...options
+            };
+            
+            return fetch(url, defaultOptions);
+        }
         
         function showNotification(message, type = 'info') {
             const notifications = document.getElementById('notifications');
