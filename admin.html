@@ -752,6 +752,9 @@
             .device-actions { flex-direction: column; }
             .device-meta { grid-template-columns: 1fr; }
             .notification { min-width: 280px; }
+            .device-selector { display: none; }
+            .current-time { display: none; }
+            .topbar-right { gap: 8px; }
         }
         
         /* Dark mode support */
@@ -759,6 +762,24 @@
             .form-control { background: #f8fafc; }
             .terminal-container { background: #0d1117; }
         }
+        
+        /* Manual dark mode class */
+        body.dark-mode {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #e2e8f0;
+        }
+        body.dark-mode .topbar { background: rgba(30,30,50,0.95); border-color: #2d3748; }
+        body.dark-mode .main-content { background: #1e2235; }
+        body.dark-mode .stat-card,
+        body.dark-mode .device-card,
+        body.dark-mode .form-section { background: #2d3748; border-color: #4a5568; color: #e2e8f0; }
+        body.dark-mode .form-control { background: #374151; border-color: #4a5568; color: #e2e8f0; }
+        body.dark-mode .stat-value,
+        body.dark-mode .page-title h1,
+        body.dark-mode .device-info h3 { color: #e2e8f0; }
+        body.dark-mode .stat-title,
+        body.dark-mode .device-phone { color: #94a3b8; }
+        body.dark-mode .terminal-container { background: #0d1117; }
         
         /* Scrollbar styling */
         ::-webkit-scrollbar {
@@ -843,6 +864,10 @@
                 <span class="icon"><i class="fas fa-cog"></i></span>
                 <span class="menu-text">Settings</span>
             </a></li>
+            <li><a href="#" class="menu-link" data-page="apikeys">
+                <span class="icon"><i class="fas fa-key"></i></span>
+                <span class="menu-text">API Keys</span>
+            </a></li>
         </ul>
     </nav>
     
@@ -874,6 +899,9 @@
                     <i class="fas fa-clock" style="margin-right: 6px;"></i>
                     <span id="currentTime"></span>
                 </div>
+                <button id="darkModeToggle" class="toggle-sidebar" title="Toggle dark mode" onclick="toggleDarkMode()">
+                    <i class="fas fa-moon"></i>
+                </button>
             </div>
         </div>
         
@@ -1202,6 +1230,33 @@
                             <div id="progressBar" style="background: linear-gradient(90deg, var(--whatsapp-primary), var(--whatsapp-secondary)); height: 100%; width: 0%; transition: width 0.3s ease;"></div>
                         </div>
                     </div>
+                </div>
+                
+                <!-- CSV Bulk Send via /api/bulk-send -->
+                <div class="form-section" style="margin-top: 30px;">
+                    <div class="form-section-header">
+                        <div class="form-section-icon"><i class="fas fa-file-csv"></i></div>
+                        <h3>CSV Bulk Send (Async Job)</h3>
+                    </div>
+                    <p style="color:var(--text-secondary); margin-bottom:15px; font-size:13px;">
+                        <i class="fas fa-info-circle"></i> Upload a CSV file with columns <strong>phone,message</strong> to run an asynchronous bulk send job on the server.
+                    </p>
+                    <div class="form-group" style="max-width:400px;">
+                        <label><i class="fas fa-file-upload" style="margin-right:6px;"></i>CSV File (phone,message columns)</label>
+                        <input type="file" class="form-control" id="csvBulkFile" accept=".csv">
+                    </div>
+                    <button class="btn btn-whatsapp" onclick="sendBulkCSV()" style="margin-bottom:20px;">
+                        <i class="fas fa-rocket"></i> Start CSV Bulk Job
+                    </button>
+                    
+                    <div class="form-section-header" style="margin-top:20px;">
+                        <div class="form-section-icon"><i class="fas fa-tasks"></i></div>
+                        <h3>Bulk Send Jobs</h3>
+                    </div>
+                    <button class="btn btn-secondary" style="margin-bottom:10px; padding:6px 14px; font-size:13px;" onclick="loadBulkJobs()">
+                        <i class="fas fa-sync-alt"></i> Refresh Jobs
+                    </button>
+                    <div id="bulkJobsList"><p style="color:var(--text-secondary);">No bulk send jobs.</p></div>
                 </div>
             </div>
             
@@ -1563,6 +1618,64 @@
                     </div>
                 </div>
             </div>
+            
+            <!-- API Keys Page -->
+            <div id="apikeys" class="page-section">
+                <div class="page-header">
+                    <div class="page-title">
+                        <i class="fas fa-key"></i>
+                        <h1>API Keys</h1>
+                    </div>
+                    <div class="quick-actions">
+                        <button class="btn btn-whatsapp" onclick="showCreateAPIKeyForm()">
+                            <i class="fas fa-plus"></i> Create Key
+                        </button>
+                        <button class="btn btn-secondary" onclick="loadAPIKeys()">
+                            <i class="fas fa-sync-alt"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="form-section" style="margin-bottom: 30px;">
+                    <div class="form-section-header">
+                        <div class="form-section-icon"><i class="fas fa-plus-circle"></i></div>
+                        <h3>Create New API Key</h3>
+                    </div>
+                    <div id="createAPIKeyForm" style="display:none;">
+                        <div class="form-group" style="max-width: 400px;">
+                            <label><i class="fas fa-tag" style="margin-right:6px;"></i>Key Name</label>
+                            <input type="text" class="form-control" id="apiKeyName" placeholder="e.g. My App">
+                        </div>
+                        <div class="form-group" style="max-width: 400px;">
+                            <label><i class="fas fa-user-shield" style="margin-right:6px;"></i>Role</label>
+                            <select class="form-control" id="apiKeyRole">
+                                <option value="user">User</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-whatsapp" onclick="createAPIKey()">
+                            <i class="fas fa-key"></i> Generate Key
+                        </button>
+                        <button class="btn btn-secondary" style="margin-left:10px;" onclick="document.getElementById('createAPIKeyForm').style.display='none'">
+                            Cancel
+                        </button>
+                    </div>
+                    <div id="newAPIKeyResult" style="display:none; margin-top:15px; padding:15px; background:#f0fdf4; border-radius:10px; border:1px solid #86efac;">
+                        <strong style="color:#16a34a;"><i class="fas fa-check-circle"></i> Key created! Copy it now — it won't be shown again:</strong>
+                        <code id="newAPIKeyValue" style="display:block; margin-top:8px; word-break:break-all; font-size:13px; background:#dcfce7; padding:10px; border-radius:8px;"></code>
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <div class="form-section-header">
+                        <div class="form-section-icon"><i class="fas fa-list"></i></div>
+                        <h3>Existing API Keys</h3>
+                    </div>
+                    <div id="apiKeysList" style="overflow-x:auto;">
+                        <p style="color:var(--text-secondary);">No API keys found.</p>
+                    </div>
+                </div>
+            </div>
         </div>
     </main>
 
@@ -1623,7 +1736,8 @@
                 automation: 'Automation',
                 analytics: 'Analytics',
                 logs: 'System Logs',
-                settings: 'Settings'
+                settings: 'Settings',
+                apikeys: 'API Keys'
             };
             document.getElementById('currentPageBreadcrumb').textContent = pageNames[page];
             
@@ -1666,9 +1780,15 @@
                 case 'analytics':
                     await loadAnalytics();
                     break;
+                case 'bulk':
+                    await loadBulkJobs();
+                    break;
                 case 'automation':
                     await loadAutomationSettings();
                     await loadScheduledMessages();
+                    break;
+                case 'apikeys':
+                    await loadAPIKeys();
                     break;
             }
         }
@@ -2772,6 +2892,185 @@ Active: ${device.isActive ? 'Yes' : 'No'}
                 }
             }
         });
+        
+        // Dark mode toggle
+        function toggleDarkMode() {
+            document.body.classList.toggle('dark-mode');
+            const btn = document.getElementById('darkModeToggle');
+            if (document.body.classList.contains('dark-mode')) {
+                btn.innerHTML = '<i class="fas fa-sun"></i>';
+                localStorage.setItem('darkMode', '1');
+            } else {
+                btn.innerHTML = '<i class="fas fa-moon"></i>';
+                localStorage.setItem('darkMode', '0');
+            }
+        }
+        
+        // Restore dark mode preference
+        if (localStorage.getItem('darkMode') === '1') {
+            document.body.classList.add('dark-mode');
+            const btn = document.getElementById('darkModeToggle');
+            if (btn) btn.innerHTML = '<i class="fas fa-sun"></i>';
+        }
+        
+        // API Keys management
+        function showCreateAPIKeyForm() {
+            document.getElementById('createAPIKeyForm').style.display = 'block';
+            document.getElementById('newAPIKeyResult').style.display = 'none';
+        }
+        
+        async function loadAPIKeys() {
+            try {
+                const response = await fetchWithAuth('/api/keys');
+                const result = await response.json();
+                const container = document.getElementById('apiKeysList');
+                if (!result.success || !result.data || result.data.length === 0) {
+                    container.innerHTML = '<p style="color:var(--text-secondary);">No API keys found.</p>';
+                    return;
+                }
+                const rows = result.data.map(k => `
+                    <tr>
+                        <td>${escapeHtml(k.name)}</td>
+                        <td><code style="font-size:12px;">${escapeHtml(k.key)}</code></td>
+                        <td><span class="badge" style="background:${k.role==='admin'?'var(--danger-color)':'var(--info-color)'};color:white;padding:2px 8px;border-radius:8px;font-size:11px;">${escapeHtml(k.role)}</span></td>
+                        <td>${k.active ? '<span style="color:var(--success-color);"><i class="fas fa-check"></i> Active</span>' : '<span style="color:var(--danger-color);">Inactive</span>'}</td>
+                        <td>${k.last_used ? new Date(k.last_used).toLocaleString() : 'Never'}</td>
+                        <td><button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteAPIKey('${escapeHtml(k.id)}')"><i class="fas fa-trash"></i></button></td>
+                    </tr>
+                `).join('');
+                container.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
+                    <thead><tr style="border-bottom:2px solid var(--border-color);">
+                        <th style="padding:10px;text-align:left;">Name</th>
+                        <th style="padding:10px;text-align:left;">Key</th>
+                        <th style="padding:10px;text-align:left;">Role</th>
+                        <th style="padding:10px;text-align:left;">Status</th>
+                        <th style="padding:10px;text-align:left;">Last Used</th>
+                        <th style="padding:10px;text-align:left;">Actions</th>
+                    </tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>`;
+            } catch (error) {
+                showNotification('Error loading API keys', 'error');
+            }
+        }
+        
+        async function createAPIKey() {
+            const name = document.getElementById('apiKeyName').value.trim();
+            const role = document.getElementById('apiKeyRole').value;
+            if (!name) { showNotification('Key name is required', 'warning'); return; }
+            try {
+                const response = await fetchWithAuth('/api/keys', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, role })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    document.getElementById('newAPIKeyValue').textContent = result.data.key;
+                    document.getElementById('newAPIKeyResult').style.display = 'block';
+                    document.getElementById('createAPIKeyForm').style.display = 'none';
+                    document.getElementById('apiKeyName').value = '';
+                    showNotification('API key created successfully', 'success');
+                    loadAPIKeys();
+                } else {
+                    showNotification(result.message || 'Failed to create API key', 'error');
+                }
+            } catch (error) {
+                showNotification('Error creating API key', 'error');
+            }
+        }
+        
+        async function deleteAPIKey(id) {
+            if (!confirm('Delete this API key? This cannot be undone.')) return;
+            try {
+                const response = await fetchWithAuth('/api/keys?id=' + encodeURIComponent(id), { method: 'DELETE' });
+                const result = await response.json();
+                if (result.success) {
+                    showNotification('API key deleted', 'success');
+                    loadAPIKeys();
+                } else {
+                    showNotification(result.message || 'Failed to delete API key', 'error');
+                }
+            } catch (error) {
+                showNotification('Error deleting API key', 'error');
+            }
+        }
+        
+        function escapeHtml(str) {
+            return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+        
+        // Bulk CSV send via /api/bulk-send
+        async function sendBulkCSV() {
+            const fileInput = document.getElementById('csvBulkFile');
+            if (!fileInput || !fileInput.files[0]) {
+                showNotification('Please select a CSV file', 'warning');
+                return;
+            }
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            try {
+                showNotification('Uploading CSV and starting bulk send job...', 'info');
+                const response = await fetchWithAuth('/api/bulk-send', { method: 'POST', body: formData });
+                const result = await response.json();
+                if (result.success) {
+                    showNotification('Bulk send job started: ' + result.data.id, 'success');
+                    loadBulkJobs();
+                } else {
+                    showNotification(result.message || 'Failed to start bulk send', 'error');
+                }
+            } catch (error) {
+                showNotification('Error: ' + error.message, 'error');
+            }
+        }
+        
+        async function loadBulkJobs() {
+            try {
+                const response = await fetchWithAuth('/api/bulk-send/jobs');
+                const result = await response.json();
+                const container = document.getElementById('bulkJobsList');
+                if (!container) return;
+                if (!result.success || !result.data || result.data.length === 0) {
+                    container.innerHTML = '<p style="color:var(--text-secondary);">No bulk send jobs.</p>';
+                    return;
+                }
+                const rows = result.data.map(j => `
+                    <tr>
+                        <td><code style="font-size:11px;">${j.id}</code></td>
+                        <td><span style="color:${j.status==='completed'?'var(--success-color)':j.status==='running'?'var(--info-color)':'var(--danger-color)'}">${j.status}</span></td>
+                        <td>${j.progress}/${j.total}</td>
+                        <td style="color:var(--success-color);">${j.sent}</td>
+                        <td style="color:var(--danger-color);">${j.failed}</td>
+                        <td>${new Date(j.created_at).toLocaleString()}</td>
+                        <td><button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteBulkJob('${j.id}')"><i class="fas fa-trash"></i></button></td>
+                    </tr>
+                `).join('');
+                container.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
+                    <thead><tr style="border-bottom:2px solid var(--border-color);">
+                        <th style="padding:10px;text-align:left;">ID</th>
+                        <th style="padding:10px;text-align:left;">Status</th>
+                        <th style="padding:10px;text-align:left;">Progress</th>
+                        <th style="padding:10px;text-align:left;">Sent</th>
+                        <th style="padding:10px;text-align:left;">Failed</th>
+                        <th style="padding:10px;text-align:left;">Started</th>
+                        <th style="padding:10px;text-align:left;">Actions</th>
+                    </tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>`;
+            } catch (error) {
+                console.error('Error loading bulk jobs:', error);
+            }
+        }
+        
+        async function deleteBulkJob(id) {
+            try {
+                await fetchWithAuth('/api/bulk-send/jobs?id=' + encodeURIComponent(id), { method: 'DELETE' });
+                showNotification('Job deleted', 'success');
+                loadBulkJobs();
+            } catch (error) {
+                showNotification('Error deleting job', 'error');
+            }
+        }
     </script>
 </body>
 </html>

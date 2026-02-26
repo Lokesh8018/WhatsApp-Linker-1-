@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: wa-linker
+    env: go
+    buildCommand: CGO_ENABLED=1 go build -o wa-linker .
+    startCommand: ./wa-linker
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: ADMIN_USER
+        sync: false
+      - key: ADMIN_PASS
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+    disk:
+      name: wa-linker-data
+      mountPath: /app
+      sizeGB: 1
