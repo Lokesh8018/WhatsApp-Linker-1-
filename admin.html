@@ -814,6 +814,22 @@
     </style>
 </head>
 <body>
+<!-- Login Modal -->
+<div id="loginModal" style="display:flex;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:12px;padding:40px 36px;min-width:320px;box-shadow:0 8px 40px rgba(0,0,0,0.3);">
+        <h2 style="margin-bottom:24px;color:#1e3a8a;font-size:22px;">Admin Login</h2>
+        <div style="margin-bottom:14px;">
+            <label style="display:block;margin-bottom:4px;font-weight:500;color:#374151;">Username</label>
+            <input id="loginUser" type="text" value="admin" style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:7px;font-size:15px;">
+        </div>
+        <div style="margin-bottom:22px;">
+            <label style="display:block;margin-bottom:4px;font-weight:500;color:#374151;">Password</label>
+            <input id="loginPass" type="password" value="admin123" style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:7px;font-size:15px;">
+        </div>
+        <button onclick="doLogin()" style="width:100%;padding:11px;background:#1e40af;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;">Login</button>
+        <p id="loginError" style="color:#ef4444;margin-top:12px;display:none;text-align:center;">Invalid credentials</p>
+    </div>
+</div>
     <!-- Notifications Container -->
     <div class="notifications" id="notifications"></div>
     
@@ -1680,6 +1696,41 @@
     </main>
 
     <script>
+        // --- Auth State ---
+        let authCredentials = null; // base64 encoded "user:pass"
+
+        function fetchWithAuth(url, options = {}) {
+            const headers = Object.assign({}, options.headers || {});
+            if (authCredentials) {
+                headers['Authorization'] = 'Basic ' + authCredentials;
+            }
+            return fetch(url, Object.assign({}, options, { headers }));
+        }
+
+        function doLogin() {
+            const user = document.getElementById('loginUser').value.trim();
+            const pass = document.getElementById('loginPass').value;
+            if (!user || !pass) return;
+            document.getElementById('loginError').style.display = 'none';
+            authCredentials = btoa(user + ':' + pass);
+            // Test credentials
+            fetch('/api/stats', { headers: { 'Authorization': 'Basic ' + authCredentials } })
+                .then(r => {
+                    if (r.status === 401) {
+                        document.getElementById('loginError').style.display = 'block';
+                        authCredentials = null;
+                    } else {
+                        document.getElementById('loginModal').style.display = 'none';
+                        loadInitialData();
+                    }
+                })
+                .catch(() => {
+                    // If the server is unreachable during test, proceed anyway
+                    document.getElementById('loginModal').style.display = 'none';
+                    loadInitialData();
+                });
+        }
+
         // Global variables
         let currentPage = 'dashboard';
         let devices = [];
@@ -1690,8 +1741,8 @@
         document.addEventListener('DOMContentLoaded', function() {
             initializeDashboard();
             setupEventListeners();
-            loadInitialData();
             startRealTimeUpdates();
+            // loadInitialData() is called after login via doLogin()
         });
         
         // Initialize
@@ -2701,18 +2752,6 @@ Active: ${device.isActive ? 'Yes' : 'No'}
                 "'": '&#039;'
             };
             return text.replace(/[&<>"']/g, m => map[m]);
-        }
-        
-        async function fetchWithAuth(url, options = {}) {
-            const defaultOptions = {
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...options.headers
-                },
-                ...options
-            };
-            
-            return fetch(url, defaultOptions);
         }
         
         function showNotification(message, type = 'info') {
