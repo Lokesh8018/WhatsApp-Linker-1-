@@ -1851,6 +1851,7 @@
             await loadDevices();
             await loadStats();
             await loadLogs();
+            await loadSettings();
             updateDeviceSelectors();
         }
         
@@ -2056,20 +2057,19 @@
         
         async function disconnectDevice(deviceId) {
             if (!confirm('Are you sure you want to disconnect this device?')) return;
-            
             try {
-                const response = await fetchWithAuth('/api/device/disconnect', {
+                const { data: { session } } = await supabase.auth.getSession();
+                await fetch('/api/device/disconnect', {
                     method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + (session ? session.access_token : ''),
+                        'Content-Type': 'application/json'
+                    },
                     body: JSON.stringify({ deviceId })
                 });
-                
-                const result = await response.json();
-                if (result.success) {
-                    loadDevices();
-                    showNotification('Device disconnected successfully', 'success');
-                } else {
-                    showNotification(result.message || 'Failed to disconnect device', 'error');
-                }
+                await supabase.from('devices').update({ status: 'disconnected' }).eq('id', deviceId);
+                loadDevices();
+                showNotification('Device disconnected successfully', 'success');
             } catch (error) {
                 showNotification('Error disconnecting device', 'error');
             }
@@ -2404,7 +2404,51 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         }
         
         async function loadScheduledMessages() {
-            // Implementation for loading scheduled messages
+            try {
+                const { data, error } = await supabase
+                    .from('scheduled_messages')
+                    .select('*')
+                    .order('scheduled_at', { ascending: true });
+                const container = document.getElementById('scheduledMessagesList');
+                if (!container) return;
+                if (error || !data || data.length === 0) {
+                    container.innerHTML = '<p style="color:var(--text-secondary);">No scheduled messages.</p>';
+                    return;
+                }
+                const rows = data.map(m => `
+                    <tr>
+                        <td>${escapeHtml(m.phone || '')}</td>
+                        <td>${escapeHtml((m.message || '').substring(0, 50))}${(m.message||'').length > 50 ? '...' : ''}</td>
+                        <td>${new Date(m.scheduled_at).toLocaleString()}</td>
+                        <td><span style="color:${m.status==='sent'?'var(--success-color)':m.status==='failed'?'var(--danger-color)':'var(--warning-color)'}">${m.status}</span></td>
+                        <td><button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteScheduledMessage('${escapeHtml(m.id)}')"><i class="fas fa-trash"></i></button></td>
+                    </tr>
+                `).join('');
+                container.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
+                    <thead><tr style="border-bottom:2px solid var(--border-color);">
+                        <th style="padding:10px;text-align:left;">Phone</th>
+                        <th style="padding:10px;text-align:left;">Message</th>
+                        <th style="padding:10px;text-align:left;">Scheduled At</th>
+                        <th style="padding:10px;text-align:left;">Status</th>
+                        <th style="padding:10px;text-align:left;">Actions</th>
+                    </tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>`;
+            } catch (error) {
+                console.error('Error loading scheduled messages:', error);
+            }
+        }
+
+        async function deleteScheduledMessage(id) {
+            try {
+                const { error } = await supabase.from('scheduled_messages').delete().eq('id', id);
+                if (!error) {
+                    showNotification('Scheduled message deleted', 'success');
+                    loadScheduledMessages();
+                }
+            } catch (error) {
+                showNotification('Error deleting scheduled message', 'error');
+            }
         }
         
         // Logs
@@ -2472,8 +2516,10 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         
         async function downloadLogs() {
             try {
-                const response = await fetchWithAuth('/api/logs/download');
-                const blob = await response.blob();
+                const { data, error } = await supabase.from('logs').select('*').order('created_at', { ascending: false });
+                if (error) throw error;
+                const text = (data || []).map(r => `[${r.created_at}] [${r.level || 'INFO'}] ${r.message}`).join('\n');
+                const blob = new Blob([text], { type: 'text/plain' });
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
@@ -2511,8 +2557,12 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         
         async function exportAnalytics() {
             try {
-                const response = await fetchWithAuth('/api/analytics/export');
-                const blob = await response.blob();
+                const { data, error } = await supabase.from('message_history').select('*').order('created_at', { ascending: false });
+                if (error) throw error;
+                const headers = 'id,direction,phone,message,status,created_at';
+                const rows = (data || []).map(r => `${r.id},${r.direction},${r.phone},"${(r.message||'').replace(/"/g,'""')}",${r.status},${r.created_at}`);
+                const csv = [headers, ...rows].join('\n');
+                const blob = new Blob([csv], { type: 'text/csv' });
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
@@ -2539,24 +2589,19 @@ Active: ${device.isActive ? 'Yes' : 'No'}
             const dailyLimit = parseInt(document.getElementById('dailyLimit').value) || 100;
             const hourlyLimit = parseInt(document.getElementById('hourlyLimit').value) || 20;
             const minDelay = parseInt(document.getElementById('minDelay').value) || 3;
-            
             try {
-                const response = await fetchWithAuth('/api/config', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        safe_mode: safeMode,
-                        daily_send_limit: dailyLimit,
-                        hourly_send_limit: hourlyLimit,
-                        min_send_delay: minDelay
-                    })
+                const { error } = await supabase.from('settings').upsert({
+                    id: 1,
+                    safe_mode: safeMode,
+                    daily_send_limit: dailyLimit,
+                    hourly_send_limit: hourlyLimit,
+                    min_send_delay: minDelay,
+                    updated_at: new Date().toISOString()
                 });
-                
-                const result = await response.json();
-                
-                if (result.success) {
+                if (!error) {
                     showNotification('Settings saved successfully!', 'success');
                 } else {
-                    showNotification(result.message || 'Failed to save settings', 'error');
+                    showNotification('Failed to save settings', 'error');
                 }
             } catch (error) {
                 showNotification('Error saving settings', 'error');
@@ -2565,14 +2610,12 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         
         async function loadSettings() {
             try {
-                const response = await fetchWithAuth('/api/config');
-                const result = await response.json();
-                
-                if (result.success && result.data) {
-                    document.getElementById('safeMode').checked = result.data.safe_mode || false;
-                    document.getElementById('dailyLimit').value = result.data.daily_send_limit || 100;
-                    document.getElementById('hourlyLimit').value = result.data.hourly_send_limit || 20;
-                    document.getElementById('minDelay').value = result.data.min_send_delay || 3;
+                const { data, error } = await supabase.from('settings').select('*').single();
+                if (!error && data) {
+                    document.getElementById('safeMode').checked = data.safe_mode || false;
+                    document.getElementById('dailyLimit').value = data.daily_send_limit || 100;
+                    document.getElementById('hourlyLimit').value = data.hourly_send_limit || 20;
+                    document.getElementById('minDelay').value = data.min_send_delay || 3;
                 }
             } catch (error) {
                 console.error('Error loading settings:', error);
@@ -2581,8 +2624,28 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         
         async function downloadBackup() {
             try {
-                const response = await fetchWithAuth('/api/backup');
-                const blob = await response.blob();
+                const [stats, logs, devices, messages, apiKeys, bulkJobs, scheduled, settings] = await Promise.all([
+                    supabase.from('stats').select('*'),
+                    supabase.from('logs').select('*'),
+                    supabase.from('devices').select('*'),
+                    supabase.from('message_history').select('*'),
+                    supabase.from('api_keys').select('*'),
+                    supabase.from('bulk_jobs').select('*'),
+                    supabase.from('scheduled_messages').select('*'),
+                    supabase.from('settings').select('*'),
+                ]);
+                const backup = {
+                    exported_at: new Date().toISOString(),
+                    stats: stats.data,
+                    logs: logs.data,
+                    devices: devices.data,
+                    message_history: messages.data,
+                    api_keys: apiKeys.data,
+                    bulk_jobs: bulkJobs.data,
+                    scheduled_messages: scheduled.data,
+                    settings: settings.data,
+                };
+                const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
@@ -2633,12 +2696,12 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         
         async function restartSystem() {
             if (!confirm('Are you sure you want to restart the system?')) return;
-            
             try {
-                const response = await fetchWithAuth('/api/restart', {
-                    method: 'POST'
+                const { data: { session } } = await supabase.auth.getSession();
+                const response = await fetch('/api/restart', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + (session ? session.access_token : '') }
                 });
-                
                 const result = await response.json();
                 if (result.success) {
                     showNotification('System is restarting...', 'info');
@@ -2653,22 +2716,15 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         
         async function logoutAllDevices() {
             if (!confirm('Are you sure you want to logout all devices? This action cannot be undone.')) return;
-            
             try {
-                const response = await fetchWithAuth('/logout', {
-                    method: 'POST'
+                const { data: { session } } = await supabase.auth.getSession();
+                await fetch('/logout', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + (session ? session.access_token : '') }
                 });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    showNotification('All devices logged out successfully', 'success');
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 2000);
-                } else {
-                    showNotification(result.message || 'Failed to logout devices', 'error');
-                }
+                await supabase.from('devices').update({ status: 'disconnected' }).neq('id', '');
+                showNotification('All devices logged out successfully', 'success');
+                setTimeout(() => loadDevices(), 2000);
             } catch (error) {
                 showNotification('Error logging out devices', 'error');
             }
@@ -2676,20 +2732,15 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         
         async function disconnectAllDevices() {
             if (!confirm('Are you sure you want to disconnect all devices?')) return;
-            
             try {
-                const response = await fetchWithAuth('/api/devices/disconnect-all', {
-                    method: 'POST'
+                const { data: { session } } = await supabase.auth.getSession();
+                await fetch('/api/devices/disconnect-all', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + (session ? session.access_token : '') }
                 });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    showNotification('All devices disconnected', 'success');
-                    loadDevices();
-                } else {
-                    showNotification('Failed to disconnect all devices', 'error');
-                }
+                await supabase.from('devices').update({ status: 'disconnected' }).neq('id', '');
+                showNotification('All devices disconnected', 'success');
+                loadDevices();
             } catch (error) {
                 showNotification('Error disconnecting devices', 'error');
             }
@@ -3027,21 +3078,19 @@ Active: ${device.isActive ? 'Yes' : 'No'}
             const name = document.getElementById('apiKeyName').value.trim();
             if (!name) { showNotification('Key name is required', 'warning'); return; }
             try {
-                const response = await fetchWithAuth('/api/keys', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, role: 'user' })
-                });
-                const result = await response.json();
-                if (result.success) {
-                    document.getElementById('newAPIKeyValue').textContent = result.data.key;
+                const arr = new Uint8Array(32);
+                crypto.getRandomValues(arr);
+                const key = 'wl_' + Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+                const { data, error } = await supabase.from('api_keys').insert({ name, key }).select().single();
+                if (!error && data) {
+                    document.getElementById('newAPIKeyValue').textContent = data.key;
                     document.getElementById('newAPIKeyResult').style.display = 'block';
                     document.getElementById('createAPIKeyForm').style.display = 'none';
                     document.getElementById('apiKeyName').value = '';
                     showNotification('API key created successfully', 'success');
                     loadAPIKeys();
                 } else {
-                    showNotification(result.message || 'Failed to create API key', 'error');
+                    showNotification((error && error.message) || 'Failed to create API key', 'error');
                 }
             } catch (error) {
                 showNotification('Error creating API key', 'error');
@@ -3078,7 +3127,12 @@ Active: ${device.isActive ? 'Yes' : 'No'}
             formData.append('file', fileInput.files[0]);
             try {
                 showNotification('Uploading CSV and starting bulk send job...', 'info');
-                const response = await fetchWithAuth('/api/bulk-send', { method: 'POST', body: formData });
+                const { data: { session } } = await supabase.auth.getSession();
+                const response = await fetch('/api/bulk-send', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + (session ? session.access_token : '') },
+                    body: formData
+                });
                 const result = await response.json();
                 if (result.success) {
                     showNotification('Bulk send job started: ' + result.data.id, 'success');
