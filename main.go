@@ -9,8 +9,10 @@ import (
 	mathrand "math/rand"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -93,9 +95,6 @@ type APIResponse struct {
 
 // Initialize security components
 func initSecurity() {
-	// Initialize random seed
-	mathrand.Seed(time.Now().UnixNano())
-
 	// Realistic user agents for different platforms
 	userAgents = []string{
 		"WhatsApp/2.23.20.0 Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -212,13 +211,19 @@ func calculateSmartDelay() time.Duration {
 	if maxDelay == 0 {
 		maxDelay = 8 // Maximum 8 seconds
 	}
+	if maxDelay <= minDelay {
+		maxDelay = minDelay + 5
+	}
 
 	// Add randomization to avoid patterns
 	baseDelay := minDelay + mathrand.Intn(maxDelay-minDelay+1)
-	
+
 	// Add small random variation (±20%)
 	variation := int(float64(baseDelay) * 0.2)
-	finalDelay := baseDelay + mathrand.Intn(variation*2) - variation
+	if variation < 1 {
+		variation = 1
+	}
+	finalDelay := baseDelay + mathrand.Intn(variation*2+1) - variation
 
 	if finalDelay < minDelay {
 		finalDelay = minDelay
@@ -370,7 +375,10 @@ func eventHandler(evt interface{}) {
 				sender = v.Info.Sender.User
 			}
 
-			updateMessageStats(false) // Received message
+			statsMu.Lock()
+			messageStats.TotalReceived++
+			messageStats.LastActivity = time.Now()
+			statsMu.Unlock()
 			addLog(fmt.Sprintf("📩 Message received from: %s", sender))
 
 			// Smart auto-reply with anti-spam protection
@@ -387,13 +395,18 @@ func eventHandler(evt interface{}) {
 		addLog("🔴 Device logged out", "SECURITY")
 	case *events.Disconnected:
 		addLog("⚠️ Connection lost, implementing secure reconnection...", "WARN")
+		statsMu.Lock()
 		messageStats.BanWarnings++
-		if messageStats.BanWarnings > 3 {
+		banWarnings := messageStats.BanWarnings
+		statsMu.Unlock()
+		if banWarnings > 3 {
 			addLog("🚨 Multiple disconnections detected - possible ban warning!", "SECURITY")
 		}
 	case *events.StreamError:
 		addLog("🚨 Stream error detected - possible security issue", "SECURITY")
+		statsMu.Lock()
 		messageStats.BanWarnings++
+		statsMu.Unlock()
 	}
 }
 
@@ -485,6 +498,12 @@ func startSecureAutoSend() {
 		num = strings.ReplaceAll(num, "+", "")
 		num = strings.ReplaceAll(num, "-", "")
 		num = strings.ReplaceAll(num, " ", "")
+
+		if len(num) < 7 {
+			addLog(fmt.Sprintf("⚠️ Skipping invalid number: %s", num), "WARN")
+			skippedCount++
+			continue
+		}
 
 		if len(num) == 10 && !strings.HasPrefix(num, "91") {
 			num = "91" + num
@@ -584,7 +603,12 @@ func main() {
 	// Initialize security components first
 	initSecurity()
 	loadConfig()
-	
+
+	// Warn if using default credentials
+	if os.Getenv("ADMIN_USER") == "" || os.Getenv("ADMIN_PASS") == "" {
+		addLog("⚠️ WARNING: Using default admin credentials! Set ADMIN_USER and ADMIN_PASS env vars.", "SECURITY")
+	}
+
 	addLog("🚀 SECURE WhatsApp Automation Server Started!", "SECURITY")
 	addLog("🔒 Anti-ban protection: ENABLED", "SECURITY")
 	addLog("🛡️ Security monitoring: ACTIVE", "SECURITY")
@@ -624,6 +648,7 @@ func main() {
 	http.HandleFunc("/api/logs", basicAuth(handleLogs))
 	http.HandleFunc("/api/stats", basicAuth(handleSecureStats))
 	http.HandleFunc("/api/security", basicAuth(handleSecurityStatus))
+	http.HandleFunc("/api/schedule", basicAuth(handleSchedule))
 	http.HandleFunc("/logout", basicAuth(handleLogout))
 	http.HandleFunc("/send", basicAuth(handleSecureSend))
 
@@ -632,8 +657,29 @@ func main() {
 		port = "8080"
 	}
 
-	addLog(fmt.Sprintf("🌐 Secure server running on port %s", port), "SECURITY")
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	srv := &http.Server{Addr: ":" + port}
+
+	go func() {
+		addLog(fmt.Sprintf("🌐 Secure server running on port %s", port), "SECURITY")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	addLog("🛑 Shutting down server gracefully...", "SECURITY")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if client.IsConnected() {
+		client.Disconnect()
+	}
+
+	srv.Shutdown(ctx)
+	addLog("✅ Server stopped.", "SECURITY")
 }
 
 // Enhanced handlers
@@ -659,6 +705,8 @@ func handleSecurePair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Too many pairing attempts. Please wait 60 seconds.", http.StatusTooManyRequests)
 		return
 	}
+
+	addLog(fmt.Sprintf("📱 Pairing request from IP: %s for phone: %s", r.RemoteAddr, phone), "SECURITY")
 
 	if client.Store.ID != nil {
 		w.Write([]byte("Already Linked"))
@@ -724,14 +772,18 @@ func handleApiInfo(w http.ResponseWriter, r *http.Request) {
 func handleLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	logMu.Lock()
+	logs := make([]string, len(systemLogs))
+	copy(logs, systemLogs)
+	logMu.Unlock()
+
 	json.NewEncoder(w).Encode(APIResponse{
 		Success: true,
-		Data:    systemLogs,
+		Data:    logs,
 	})
-	logMu.Unlock()
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	if client.Store.ID != nil {
 		client.Logout(context.Background())
 		addLog("🔴 Device securely logged out by admin", "SECURITY")
@@ -784,10 +836,14 @@ func handleSecureConfig(w http.ResponseWriter, r *http.Request) {
 			Success: true,
 			Message: "Configuration saved with security enhancements",
 		})
+	} else {
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 func handleSecureSend(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	targetPhone := r.URL.Query().Get("phone")
 	msgText := r.URL.Query().Get("text")
 
@@ -799,6 +855,23 @@ func handleSecureSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Clean phone number
+	targetPhone = strings.ReplaceAll(targetPhone, "+", "")
+	targetPhone = strings.ReplaceAll(targetPhone, " ", "")
+	targetPhone = strings.ReplaceAll(targetPhone, "-", "")
+
+	if len(targetPhone) < 7 {
+		json.NewEncoder(w).Encode(APIResponse{
+			Success: false,
+			Message: "Invalid phone number",
+		})
+		return
+	}
+
+	if len(targetPhone) == 10 && !strings.HasPrefix(targetPhone, "91") {
+		targetPhone = "91" + targetPhone
+	}
+
 	// Security validation
 	if safe, reason := isSendingSafe(targetPhone); !safe {
 		json.NewEncoder(w).Encode(APIResponse{
@@ -807,15 +880,6 @@ func handleSecureSend(w http.ResponseWriter, r *http.Request) {
 			Warning: "Anti-ban protection active",
 		})
 		return
-	}
-
-	// Clean phone number
-	targetPhone = strings.ReplaceAll(targetPhone, "+", "")
-	targetPhone = strings.ReplaceAll(targetPhone, " ", "")
-	targetPhone = strings.ReplaceAll(targetPhone, "-", "")
-
-	if len(targetPhone) == 10 && !strings.HasPrefix(targetPhone, "91") {
-		targetPhone = "91" + targetPhone
 	}
 
 	success := sendSecureMessage(targetPhone, msgText)
@@ -832,10 +896,10 @@ func handleSecureStats(w http.ResponseWriter, r *http.Request) {
 	
 	// Add security status to stats
 	securityStatus := "SECURE"
-	if messageStats.BanWarnings > 5 {
-		securityStatus = "WARNING"
-	} else if messageStats.BanWarnings > 10 {
+	if messageStats.BanWarnings > 10 {
 		securityStatus = "CRITICAL"
+	} else if messageStats.BanWarnings > 5 {
+		securityStatus = "WARNING"
 	}
 
 	enhancedStats := map[string]interface{}{
@@ -874,6 +938,77 @@ func handleSecurityStatus(w http.ResponseWriter, r *http.Request) {
 		Data:    securityInfo,
 		Message: "Security systems operational",
 	})
+}
+
+func handleSchedule(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == http.MethodGet {
+		scheduleMu.Lock()
+		msgs := make([]ScheduledMessage, len(scheduledMessages))
+		copy(msgs, scheduledMessages)
+		scheduleMu.Unlock()
+
+		json.NewEncoder(w).Encode(APIResponse{
+			Success: true,
+			Data:    msgs,
+		})
+	} else if r.Method == http.MethodPost {
+		var req struct {
+			Phone       string `json:"phone"`
+			Message     string `json:"message"`
+			ScheduledAt string `json:"scheduled_at"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(APIResponse{
+				Success: false,
+				Message: "Invalid request format",
+			})
+			return
+		}
+		if req.Phone == "" || req.Message == "" || req.ScheduledAt == "" {
+			json.NewEncoder(w).Encode(APIResponse{
+				Success: false,
+				Message: "phone, message, and scheduled_at are required",
+			})
+			return
+		}
+		scheduledAt, err := time.Parse(time.RFC3339, req.ScheduledAt)
+		if err != nil {
+			json.NewEncoder(w).Encode(APIResponse{
+				Success: false,
+				Message: "scheduled_at must be in RFC3339 format",
+			})
+			return
+		}
+		idBytes := make([]byte, 8)
+		if _, err := rand.Read(idBytes); err != nil {
+			json.NewEncoder(w).Encode(APIResponse{
+				Success: false,
+				Message: "Failed to generate message ID",
+			})
+			return
+		}
+		msg := ScheduledMessage{
+			ID:          fmt.Sprintf("%x", idBytes),
+			Phone:       req.Phone,
+			Message:     req.Message,
+			ScheduledAt: scheduledAt,
+			Status:      "pending",
+		}
+		scheduleMu.Lock()
+		scheduledMessages = append(scheduledMessages, msg)
+		scheduleMu.Unlock()
+		addLog(fmt.Sprintf("⏰ Scheduled message added for %s at %s", req.Phone, scheduledAt.Format(time.RFC3339)), "INFO")
+		json.NewEncoder(w).Encode(APIResponse{
+			Success: true,
+			Message: "Scheduled message added",
+			Data:    msg,
+		})
+	} else {
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func secureMessageScheduler() {
