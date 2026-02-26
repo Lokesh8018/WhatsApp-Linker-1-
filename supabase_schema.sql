@@ -85,3 +85,16 @@ create policy "Authenticated users only" on devices for all using (auth.role() =
 create policy "Authenticated users only" on api_keys for all using (auth.role() = 'authenticated');
 create policy "Authenticated users only" on bulk_jobs for all using (auth.role() = 'authenticated');
 create policy "Authenticated users only" on scheduled_messages for all using (auth.role() = 'authenticated');
+
+-- Settings table
+create table if not exists settings (
+  id bigint primary key default 1,
+  safe_mode boolean default false,
+  daily_send_limit int default 100,
+  hourly_send_limit int default 20,
+  min_send_delay int default 3,
+  updated_at timestamptz default now()
+);
+
+alter table settings enable row level security;
+create policy "Authenticated users only" on settings for all using (auth.role() = 'authenticated');
