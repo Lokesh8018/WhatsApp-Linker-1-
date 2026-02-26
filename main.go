@@ -1,6 +1,7 @@
 package main
 
 import (
+"bytes"
 "context"
 "crypto/hmac"
 "crypto/rand"
@@ -516,6 +517,61 @@ return jwtSecret, nil
 return err == nil && token.Valid
 }
 
+// validateSupabaseJWT validates a Supabase JWT token by calling the Supabase Auth API.
+func validateSupabaseJWT(token string) bool {
+supabaseURL := os.Getenv("SUPABASE_URL")
+anonKey := os.Getenv("SUPABASE_ANON_KEY")
+if supabaseURL == "" || anonKey == "" {
+return false
+}
+req, err := http.NewRequest("GET", supabaseURL+"/auth/v1/user", nil)
+if err != nil {
+return false
+}
+req.Header.Set("Authorization", "Bearer "+token)
+req.Header.Set("apikey", anonKey)
+resp, err := http.DefaultClient.Do(req)
+if err != nil {
+return false
+}
+io.Copy(io.Discard, resp.Body)
+resp.Body.Close()
+return resp.StatusCode == 200
+}
+
+// writeToSupabase writes a record to a Supabase table using the service role key.
+func writeToSupabase(table string, data map[string]interface{}) {
+supabaseURL := os.Getenv("SUPABASE_URL")
+serviceKey := os.Getenv("SUPABASE_SERVICE_KEY")
+if supabaseURL == "" || serviceKey == "" {
+return
+}
+body, err := json.Marshal(data)
+if err != nil {
+log.Printf("writeToSupabase marshal error for table %s: %v", table, err)
+return
+}
+req, err := http.NewRequest("POST", supabaseURL+"/rest/v1/"+table, bytes.NewBuffer(body))
+if err != nil {
+log.Printf("writeToSupabase request error for table %s: %v", table, err)
+return
+}
+req.Header.Set("Authorization", "Bearer "+serviceKey)
+req.Header.Set("apikey", serviceKey)
+req.Header.Set("Content-Type", "application/json")
+req.Header.Set("Prefer", "return=minimal")
+resp, err := http.DefaultClient.Do(req)
+if err != nil {
+log.Printf("writeToSupabase HTTP error for table %s: %v", table, err)
+return
+}
+if resp.StatusCode >= 400 {
+log.Printf("writeToSupabase got status %d for table %s", resp.StatusCode, table)
+}
+io.Copy(io.Discard, resp.Body)
+resp.Body.Close()
+}
+
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 return func(w http.ResponseWriter, r *http.Request) {
 ip := r.RemoteAddr
@@ -539,7 +595,7 @@ return
 authHeader := r.Header.Get("Authorization")
 if strings.HasPrefix(authHeader, "Bearer ") {
 tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
-if jwtAuth(tokenStr) {
+if jwtAuth(tokenStr) || validateSupabaseJWT(tokenStr) {
 next.ServeHTTP(w, r)
 return
 }
@@ -795,6 +851,17 @@ msgText = ext.GetText()
 
 addToHistory("received", sender, msgText, "success")
 
+go writeToSupabase("message_history", map[string]interface{}{
+"direction": "received",
+"phone":     sender,
+"message":   msgText,
+"status":    "success",
+})
+go writeToSupabase("logs", map[string]interface{}{
+"level":   "INFO",
+"message": fmt.Sprintf("Message received from: %s", sender),
+})
+
 if config.WebhookEnabled && config.WebhookURL != "" {
 go fireWebhook(map[string]interface{}{
 "event":     "message_received",
@@ -989,6 +1056,12 @@ cancel()
 addLog(fmt.Sprintf("\u2709\ufe0f Message securely sent to: %s", phone))
 updateMessageStats(true)
 addToHistory("sent", phone, message, "success", resp.ID)
+go writeToSupabase("message_history", map[string]interface{}{
+"direction": "sent",
+"phone":     phone,
+"message":   message,
+"status":    "success",
+})
 messageMu.Lock()
 lastMessageTime = time.Now()
 messageMu.Unlock()

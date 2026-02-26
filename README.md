@@ -178,7 +178,50 @@ X-Webhook-Signature: sha256=<hex>
 
 ---
 
-## Docker
+## Supabase Setup
+
+This project uses [Supabase](https://supabase.com) as the backend for the admin panel — handling authentication, database, and real-time updates.
+
+### 1. Create a Supabase Project
+
+Go to [https://supabase.com](https://supabase.com) and create a new project.
+
+### 2. Run the Database Schema
+
+In your Supabase project, open the **SQL Editor** and run the contents of `supabase_schema.sql`. This creates all required tables (`stats`, `logs`, `message_history`, `devices`, `api_keys`, `bulk_jobs`, `scheduled_messages`) with Row Level Security enabled.
+
+### 3. Create an Admin User
+
+In your Supabase project, go to **Authentication → Users** and create a new user with an email and password. This user will be used to log in to the admin dashboard.
+
+### 4. Set Environment Variables
+
+Set the following environment variables for the Go server:
+
+| Variable | Description |
+|---|---|
+| `SUPABASE_URL` | Your Supabase project URL (e.g. `https://xxxx.supabase.co`) |
+| `SUPABASE_ANON_KEY` | Your Supabase `anon` public key |
+| `SUPABASE_SERVICE_KEY` | Your Supabase `service_role` secret key (used to write events from the Go server) |
+
+You can find these values in your Supabase project under **Settings → API**.
+
+### 5. Configure `admin.html`
+
+Open `admin.html` and update the placeholder values near the top of the `<script>` section:
+
+```js
+const SUPABASE_URL = 'https://your-project.supabase.co';
+const SUPABASE_ANON_KEY = 'your-anon-key';
+```
+
+### 6. Log In
+
+Open `/admin` in your browser. You will see a login page — enter the email and password of the Supabase Auth user you created in step 3.
+
+> ⚠️ **Security:** Never commit your `.env` file or Supabase keys to version control. The `.gitignore` already excludes `.env`.
+
+---
 
 ### Build & Run with Docker
 
