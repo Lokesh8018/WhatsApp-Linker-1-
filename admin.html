@@ -11,6 +11,8 @@
     <link rel="stylesheet" href="https://unpkg.com/feather-icons/dist/feather.css">
     <!-- Custom Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Supabase JS SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
     <style>
         :root {
@@ -814,22 +816,33 @@
     </style>
 </head>
 <body>
-<!-- Login Modal -->
-<div id="loginModal" style="display:flex;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
-    <div style="background:#fff;border-radius:12px;padding:40px 36px;min-width:320px;box-shadow:0 8px 40px rgba(0,0,0,0.3);">
-        <h2 style="margin-bottom:24px;color:#1e3a8a;font-size:22px;">Admin Login</h2>
-        <div style="margin-bottom:14px;">
-            <label style="display:block;margin-bottom:4px;font-weight:500;color:#374151;">Username</label>
-            <input id="loginUser" type="text" value="admin" style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:7px;font-size:15px;">
+<!-- Full-Screen Login Page -->
+<div id="loginPage" style="display:flex;position:fixed;inset:0;z-index:9999;background:linear-gradient(135deg,#1e3a8a 0%,#1e40af 50%,#2563eb 100%);align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:16px;padding:48px 40px;min-width:340px;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <div style="text-align:center;margin-bottom:32px;">
+            <div style="width:64px;height:64px;background:#25D366;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;margin-bottom:16px;">
+                <i class="fab fa-whatsapp" style="font-size:32px;color:#fff;"></i>
+            </div>
+            <h2 style="color:#1e3a8a;font-size:24px;font-weight:700;margin-bottom:4px;">WhatsApp Hub</h2>
+            <p style="color:#6b7280;font-size:14px;">Sign in to your admin dashboard</p>
         </div>
-        <div style="margin-bottom:22px;">
-            <label style="display:block;margin-bottom:4px;font-weight:500;color:#374151;">Password</label>
-            <input id="loginPass" type="password" value="admin123" style="width:100%;padding:9px 12px;border:1px solid #d1d5db;border-radius:7px;font-size:15px;">
+        <div style="margin-bottom:16px;">
+            <label style="display:block;margin-bottom:6px;font-weight:500;color:#374151;font-size:14px;">Email Address</label>
+            <input id="loginEmail" type="email" placeholder="admin@example.com" style="width:100%;padding:10px 14px;border:1.5px solid #d1d5db;border-radius:8px;font-size:15px;outline:none;transition:border-color 0.2s;" onfocus="this.style.borderColor='#2563eb'" onblur="this.style.borderColor='#d1d5db'">
         </div>
-        <button onclick="doLogin()" style="width:100%;padding:11px;background:#1e40af;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;">Login</button>
-        <p id="loginError" style="color:#ef4444;margin-top:12px;display:none;text-align:center;">Invalid credentials</p>
+        <div style="margin-bottom:24px;">
+            <label style="display:block;margin-bottom:6px;font-weight:500;color:#374151;font-size:14px;">Password</label>
+            <input id="loginPass" type="password" placeholder="••••••••" style="width:100%;padding:10px 14px;border:1.5px solid #d1d5db;border-radius:8px;font-size:15px;outline:none;transition:border-color 0.2s;" onfocus="this.style.borderColor='#2563eb'" onblur="this.style.borderColor='#d1d5db'" onkeydown="if(event.key==='Enter')doLogin()">
+        </div>
+        <button onclick="doLogin()" id="loginBtn" style="width:100%;padding:12px;background:#1e40af;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;transition:background 0.2s;" onmouseover="this.style.background='#1d4ed8'" onmouseout="this.style.background='#1e40af'">
+            <i class="fas fa-sign-in-alt" style="margin-right:8px;"></i>Sign In
+        </button>
+        <p id="loginError" style="color:#ef4444;margin-top:14px;display:none;text-align:center;font-size:14px;background:#fef2f2;padding:10px;border-radius:8px;border:1px solid #fecaca;"></p>
     </div>
 </div>
+
+<!-- App Shell (hidden until authenticated) -->
+<div id="appShell" style="display:none;">
     <!-- Notifications Container -->
     <div class="notifications" id="notifications"></div>
     
@@ -883,6 +896,10 @@
             <li><a href="#" class="menu-link" data-page="apikeys">
                 <span class="icon"><i class="fas fa-key"></i></span>
                 <span class="menu-text">API Keys</span>
+            </a></li>
+            <li><a href="#" class="menu-link" onclick="logout(); return false;" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.15);padding-top:12px;">
+                <span class="icon"><i class="fas fa-sign-out-alt"></i></span>
+                <span class="menu-text">Sign Out</span>
             </a></li>
         </ul>
     </nav>
@@ -1696,39 +1713,51 @@
     </main>
 
     <script>
+        // --- Supabase Configuration ---
+        const SUPABASE_URL = 'YOUR_SUPABASE_URL'; // Replace with your Supabase project URL
+        const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY'; // Replace with your Supabase anon key
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
         // --- Auth State ---
-        let authCredentials = null; // base64 encoded "user:pass"
+        let supabaseSession = null;
 
         function fetchWithAuth(url, options = {}) {
             const headers = Object.assign({}, options.headers || {});
-            if (authCredentials) {
-                headers['Authorization'] = 'Basic ' + authCredentials;
+            if (supabaseSession) {
+                headers['Authorization'] = 'Bearer ' + supabaseSession.access_token;
             }
             return fetch(url, Object.assign({}, options, { headers }));
         }
 
-        function doLogin() {
-            const user = document.getElementById('loginUser').value.trim();
-            const pass = document.getElementById('loginPass').value;
-            if (!user || !pass) return;
-            document.getElementById('loginError').style.display = 'none';
-            authCredentials = btoa(user + ':' + pass);
-            // Test credentials
-            fetch('/api/stats', { headers: { 'Authorization': 'Basic ' + authCredentials } })
-                .then(r => {
-                    if (r.status === 401) {
-                        document.getElementById('loginError').style.display = 'block';
-                        authCredentials = null;
-                    } else {
-                        document.getElementById('loginModal').style.display = 'none';
-                        loadInitialData();
-                    }
-                })
-                .catch(() => {
-                    // If the server is unreachable during test, proceed anyway
-                    document.getElementById('loginModal').style.display = 'none';
-                    loadInitialData();
-                });
+        async function doLogin() {
+            const email = document.getElementById('loginEmail').value.trim();
+            const password = document.getElementById('loginPass').value;
+            if (!email || !password) return;
+            const errEl = document.getElementById('loginError');
+            errEl.style.display = 'none';
+            const btn = document.getElementById('loginBtn');
+            btn.disabled = true;
+            btn.textContent = 'Signing in...';
+            const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-sign-in-alt" style="margin-right:8px;"></i>Sign In';
+            if (error) {
+                errEl.textContent = error.message;
+                errEl.style.display = 'block';
+                return;
+            }
+            supabaseSession = data.session;
+            document.getElementById('loginPage').style.display = 'none';
+            document.getElementById('appShell').style.display = 'block';
+            loadInitialData();
+            startRealTimeUpdates();
+        }
+
+        async function logout() {
+            await supabase.auth.signOut();
+            supabaseSession = null;
+            document.getElementById('appShell').style.display = 'none';
+            document.getElementById('loginPage').style.display = 'flex';
         }
 
         // Global variables
@@ -1738,11 +1767,20 @@
         let logInterval;
         
         // Initialize dashboard
-        document.addEventListener('DOMContentLoaded', function() {
-            initializeDashboard();
-            setupEventListeners();
-            startRealTimeUpdates();
-            // loadInitialData() is called after login via doLogin()
+        document.addEventListener('DOMContentLoaded', async function() {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session) {
+                supabaseSession = session;
+                document.getElementById('loginPage').style.display = 'none';
+                document.getElementById('appShell').style.display = 'block';
+                initializeDashboard();
+                setupEventListeners();
+                loadInitialData();
+                startRealTimeUpdates();
+            } else {
+                initializeDashboard();
+                setupEventListeners();
+            }
         });
         
         // Initialize
@@ -1847,31 +1885,20 @@
         // Device management
         async function loadDevices() {
             try {
-                const response = await fetchWithAuth('/api/devices');
-                const result = await response.json();
-                
-                if (result.success) {
-                    devices = result.data || [];
+                const { data, error } = await supabase.from('devices').select('*');
+                if (!error && data) {
+                    devices = data.map(d => ({
+                        id: d.id,
+                        name: d.name || d.id,
+                        phone: d.phone || 'N/A',
+                        status: d.status || 'disconnected',
+                        platform: 'WhatsApp',
+                        lastSeen: d.last_seen,
+                        messagesCount: 0,
+                        isActive: d.status === 'connected'
+                    }));
                     displayDevices();
                     updateDeviceStats();
-                } else {
-                    const statusResponse = await fetchWithAuth('/api/info');
-                    const statusResult = await statusResponse.json();
-                    
-                    if (statusResult.success && statusResult.data.connected) {
-                        devices = [{
-                            id: 'primary',
-                            name: 'Primary Device',
-                            phone: statusResult.data.jid,
-                            status: 'online',
-                            platform: 'WhatsApp Web',
-                            lastSeen: new Date(),
-                            messagesCount: 0,
-                            isActive: true
-                        }];
-                        displayDevices();
-                        updateDeviceStats();
-                    }
                 }
             } catch (error) {
                 console.error('Error loading devices:', error);
@@ -2069,11 +2096,9 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         // Statistics
         async function loadStats() {
             try {
-                const response = await fetchWithAuth('/api/stats');
-                const result = await response.json();
-                
-                if (result.success) {
-                    updateDashboardStats(result.data);
+                const { data, error } = await supabase.from('stats').select('*').single();
+                if (!error && data) {
+                    updateDashboardStats(data);
                 }
             } catch (error) {
                 console.error('Error loading stats:', error);
@@ -2081,17 +2106,17 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         }
         
         function updateDashboardStats(stats) {
-            document.getElementById('connectedDevicesCount').textContent = devices.filter(d => d.status === 'online').length;
-            document.getElementById('messagesToday').textContent = stats.daily_counts?.[new Date().toISOString().split('T')[0]] || 0;
-            document.getElementById('totalSent').textContent = stats.total_sent || 0;
-            document.getElementById('totalReceived').textContent = stats.total_received || 0;
-            document.getElementById('totalFailed').textContent = stats.total_failed || 0;
+            document.getElementById('connectedDevicesCount').textContent = stats.active_devices || 0;
+            document.getElementById('messagesToday').textContent = stats.messages_sent || 0;
+            document.getElementById('totalSent').textContent = stats.messages_sent || 0;
+            document.getElementById('totalReceived').textContent = stats.messages_received || 0;
+            document.getElementById('totalFailed').textContent = 0;
             
-            const total = (stats.total_sent || 0) + (stats.total_failed || 0);
-            const successRate = total > 0 ? Math.round((stats.total_sent / total) * 100) : 0;
+            const total = (stats.messages_sent || 0);
+            const successRate = total > 0 ? 100 : 0;
             document.getElementById('successRate').textContent = successRate + '%';
             
-            document.getElementById('activeAutomations').textContent = stats.active_automations || 0;
+            document.getElementById('activeAutomations').textContent = stats.active_devices || 0;
         }
         
         function updateDeviceStats() {
@@ -2103,11 +2128,13 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         // Activity feed
         async function loadActivity() {
             try {
-                const response = await fetchWithAuth('/api/logs');
-                const result = await response.json();
-                
-                if (result.success && result.data) {
-                    displayActivity(result.data.slice(0, 10));
+                const { data, error } = await supabase
+                    .from('message_history')
+                    .select('*')
+                    .order('created_at', { ascending: false })
+                    .limit(20);
+                if (!error && data) {
+                    displayActivity(data.map(r => `[${r.direction}] ${r.phone}: ${r.message || ''} (${r.status || ''})`));
                 }
             } catch (error) {
                 console.error('Error loading activity:', error);
@@ -2383,11 +2410,13 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         // Logs
         async function loadLogs() {
             try {
-                const response = await fetchWithAuth('/api/logs');
-                const result = await response.json();
-                
-                if (result.success && result.data) {
-                    displayLogs(result.data);
+                const { data, error } = await supabase
+                    .from('logs')
+                    .select('*')
+                    .order('created_at', { ascending: false })
+                    .limit(100);
+                if (!error && data) {
+                    displayLogs(data.map(r => `[${r.level || 'INFO'}] ${r.message}`));
                 }
             } catch (error) {
                 console.error('Error loading logs:', error);
@@ -2463,13 +2492,8 @@ Active: ${device.isActive ? 'Yes' : 'No'}
             if (!confirm('Are you sure you want to clear all logs?')) return;
             
             try {
-                const response = await fetchWithAuth('/api/logs/clear', {
-                    method: 'POST'
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
+                const { error } = await supabase.from('logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+                if (!error) {
                     showNotification('Logs cleared successfully', 'success');
                     loadLogs();
                 } else {
@@ -2673,11 +2697,20 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         
         // Real-time updates
         function startRealTimeUpdates() {
+            // Supabase Realtime subscriptions
+            supabase
+                .channel('dashboard')
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'stats' }, loadStats)
+                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'logs' }, loadLogs)
+                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_history' }, loadActivity)
+                .subscribe();
+
+            // Polling fallback for devices and page-specific data
             refreshInterval = setInterval(async () => {
                 if (document.visibilityState === 'visible') {
-                    await loadStats();
                     await loadDevices();
                     if (currentPage === 'dashboard') {
+                        await loadStats();
                         await loadActivity();
                     }
                 }
@@ -2960,20 +2993,18 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         
         async function loadAPIKeys() {
             try {
-                const response = await fetchWithAuth('/api/keys');
-                const result = await response.json();
+                const { data, error } = await supabase.from('api_keys').select('*');
                 const container = document.getElementById('apiKeysList');
-                if (!result.success || !result.data || result.data.length === 0) {
+                if (error || !data || data.length === 0) {
                     container.innerHTML = '<p style="color:var(--text-secondary);">No API keys found.</p>';
                     return;
                 }
-                const rows = result.data.map(k => `
+                const rows = data.map(k => `
                     <tr>
-                        <td>${escapeHtml(k.name)}</td>
-                        <td><code style="font-size:12px;">${escapeHtml(k.key)}</code></td>
-                        <td><span class="badge" style="background:${k.role==='admin'?'var(--danger-color)':'var(--info-color)'};color:white;padding:2px 8px;border-radius:8px;font-size:11px;">${escapeHtml(k.role)}</span></td>
-                        <td>${k.active ? '<span style="color:var(--success-color);"><i class="fas fa-check"></i> Active</span>' : '<span style="color:var(--danger-color);">Inactive</span>'}</td>
+                        <td>${escapeHtml(k.name || '')}</td>
+                        <td><code style="font-size:12px;">${escapeHtml(k.key || '')}</code></td>
                         <td>${k.last_used ? new Date(k.last_used).toLocaleString() : 'Never'}</td>
+                        <td>${new Date(k.created_at).toLocaleString()}</td>
                         <td><button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteAPIKey('${escapeHtml(k.id)}')"><i class="fas fa-trash"></i></button></td>
                     </tr>
                 `).join('');
@@ -2981,9 +3012,8 @@ Active: ${device.isActive ? 'Yes' : 'No'}
                     <thead><tr style="border-bottom:2px solid var(--border-color);">
                         <th style="padding:10px;text-align:left;">Name</th>
                         <th style="padding:10px;text-align:left;">Key</th>
-                        <th style="padding:10px;text-align:left;">Role</th>
-                        <th style="padding:10px;text-align:left;">Status</th>
                         <th style="padding:10px;text-align:left;">Last Used</th>
+                        <th style="padding:10px;text-align:left;">Created</th>
                         <th style="padding:10px;text-align:left;">Actions</th>
                     </tr></thead>
                     <tbody>${rows}</tbody>
@@ -2995,13 +3025,12 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         
         async function createAPIKey() {
             const name = document.getElementById('apiKeyName').value.trim();
-            const role = document.getElementById('apiKeyRole').value;
             if (!name) { showNotification('Key name is required', 'warning'); return; }
             try {
                 const response = await fetchWithAuth('/api/keys', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, role })
+                    body: JSON.stringify({ name, role: 'user' })
                 });
                 const result = await response.json();
                 if (result.success) {
@@ -3022,13 +3051,12 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         async function deleteAPIKey(id) {
             if (!confirm('Delete this API key? This cannot be undone.')) return;
             try {
-                const response = await fetchWithAuth('/api/keys?id=' + encodeURIComponent(id), { method: 'DELETE' });
-                const result = await response.json();
-                if (result.success) {
+                const { error } = await supabase.from('api_keys').delete().eq('id', id);
+                if (!error) {
                     showNotification('API key deleted', 'success');
                     loadAPIKeys();
                 } else {
-                    showNotification(result.message || 'Failed to delete API key', 'error');
+                    showNotification((error && error.message) || 'Failed to delete API key', 'error');
                 }
             } catch (error) {
                 showNotification('Error deleting API key', 'error');
@@ -3065,15 +3093,17 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         
         async function loadBulkJobs() {
             try {
-                const response = await fetchWithAuth('/api/bulk-send/jobs');
-                const result = await response.json();
+                const { data, error } = await supabase
+                    .from('bulk_jobs')
+                    .select('*')
+                    .order('created_at', { ascending: false });
                 const container = document.getElementById('bulkJobsList');
                 if (!container) return;
-                if (!result.success || !result.data || result.data.length === 0) {
+                if (error || !data || data.length === 0) {
                     container.innerHTML = '<p style="color:var(--text-secondary);">No bulk send jobs.</p>';
                     return;
                 }
-                const rows = result.data.map(j => `
+                const rows = data.map(j => `
                     <tr>
                         <td><code style="font-size:11px;">${j.id}</code></td>
                         <td><span style="color:${j.status==='completed'?'var(--success-color)':j.status==='running'?'var(--info-color)':'var(--danger-color)'}">${j.status}</span></td>
@@ -3103,7 +3133,7 @@ Active: ${device.isActive ? 'Yes' : 'No'}
         
         async function deleteBulkJob(id) {
             try {
-                await fetchWithAuth('/api/bulk-send/jobs?id=' + encodeURIComponent(id), { method: 'DELETE' });
+                await supabase.from('bulk_jobs').delete().eq('id', id);
                 showNotification('Job deleted', 'success');
                 loadBulkJobs();
             } catch (error) {
@@ -3111,6 +3141,7 @@ Active: ${device.isActive ? 'Yes' : 'No'}
             }
         }
     </script>
+</div><!-- end appShell -->
 </body>
 </html>
 

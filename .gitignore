@@ -5,3 +5,4 @@ wa-linker
 users.json
 apikeys.json
 audit.log
+.env
