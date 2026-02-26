@@ -1213,6 +1213,10 @@ http.HandleFunc("/api/security/lockouts", authMiddleware(handleLockouts))
 http.HandleFunc("/api/bulk-send", authMiddleware(handleBulkSend))
 http.HandleFunc("/api/bulk-send/jobs", authMiddleware(handleBulkSendJobs))
 http.HandleFunc("/api/delivery", authMiddleware(handleDelivery))
+http.HandleFunc("/api/restart", authMiddleware(handleRestart))
+http.HandleFunc("/api/devices/disconnect-all", authMiddleware(handleDisconnectAll))
+http.HandleFunc("/api/automation", authMiddleware(handleAutomation))
+http.HandleFunc("/api/restore", authMiddleware(handleRestore))
 port := os.Getenv("PORT")
 if port == "" {
 port = "8080"
@@ -1904,8 +1908,31 @@ go writeToSupabase("scheduled_messages", map[string]interface{}{
 })
 addLog(fmt.Sprintf("\u23f0 Scheduled message added for %s at %s", req.Phone, scheduledAt.Format(time.RFC3339)), "INFO")
 json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Scheduled message added", Data: msg})
+} else if r.Method == http.MethodDelete {
+id := r.URL.Query().Get("id")
+if id == "" {
+w.WriteHeader(http.StatusBadRequest)
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Missing id"})
+return
+}
+scheduleMu.Lock()
+found := false
+for i, m := range scheduledMessages {
+if m.ID == id {
+scheduledMessages = append(scheduledMessages[:i], scheduledMessages[i+1:]...)
+found = true
+break
+}
+}
+scheduleMu.Unlock()
+if found {
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Scheduled message deleted"})
 } else {
-w.Header().Set("Allow", "GET, POST")
+w.WriteHeader(http.StatusNotFound)
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Message not found"})
+}
+} else {
+w.Header().Set("Allow", "GET, POST, DELETE")
 http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 }
 }
@@ -2235,4 +2262,147 @@ result = append(result, e)
 }
 historyMu.Unlock()
 json.NewEncoder(w).Encode(APIResponse{Success: true, Data: result})
+}
+
+func handleRestart(w http.ResponseWriter, r *http.Request) {
+if r.Method != http.MethodPost {
+http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+return
+}
+w.Header().Set("Content-Type", "application/json")
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Server restarting..."})
+addLog("🔄 Server restart requested via admin panel", "SECURITY")
+go func() {
+time.Sleep(500 * time.Millisecond)
+os.Exit(0)
+}()
+}
+
+func handleDisconnectAll(w http.ResponseWriter, r *http.Request) {
+if r.Method != http.MethodPost {
+http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+return
+}
+clientsMu.Lock()
+count := 0
+for _, c := range clients {
+if c != nil && c.IsConnected() {
+c.Disconnect()
+count++
+}
+}
+clientsMu.Unlock()
+addLog(fmt.Sprintf("🔌 Disconnected %d device(s) via admin panel", count), "SECURITY")
+w.Header().Set("Content-Type", "application/json")
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: fmt.Sprintf("Disconnected %d device(s)", count)})
+}
+
+func handleAutomation(w http.ResponseWriter, r *http.Request) {
+w.Header().Set("Content-Type", "application/json")
+switch r.Method {
+case http.MethodGet:
+data := map[string]interface{}{
+"enabled":      config.Enabled,
+"numbers":      config.Numbers,
+"message":      config.Message,
+"reply_enable": config.ReplyEnable,
+"reply_text":   config.ReplyText,
+"send_delay":   config.SendDelay,
+}
+json.NewEncoder(w).Encode(APIResponse{Success: true, Data: data})
+case http.MethodPost:
+var body map[string]interface{}
+if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+w.WriteHeader(http.StatusBadRequest)
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON"})
+return
+}
+if v, ok := body["enabled"].(bool); ok {
+config.Enabled = v
+}
+if v, ok := body["numbers"].(string); ok {
+config.Numbers = v
+}
+if v, ok := body["message"].(string); ok {
+config.Message = v
+}
+if v, ok := body["reply_enable"].(bool); ok {
+config.ReplyEnable = v
+}
+if v, ok := body["reply_text"].(string); ok {
+config.ReplyText = v
+}
+if v, ok := body["send_delay"].(float64); ok {
+config.SendDelay = int(v)
+}
+go saveConfig()
+addLog("⚙️ Automation settings updated via admin panel", "INFO")
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Automation settings saved"})
+default:
+http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+}
+
+func handleRestore(w http.ResponseWriter, r *http.Request) {
+if r.Method != http.MethodPost {
+http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+return
+}
+w.Header().Set("Content-Type", "application/json")
+
+if err := r.ParseMultipartForm(10 << 20); err != nil {
+r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+var backup map[string]interface{}
+if err2 := json.NewDecoder(r.Body).Decode(&backup); err2 != nil {
+w.WriteHeader(http.StatusBadRequest)
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid backup file"})
+return
+}
+restoreFromBackupMap(backup)
+addLog("📦 Settings restored from backup (JSON body) via admin panel", "SECURITY")
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Settings restored from backup"})
+return
+}
+
+file, _, err := r.FormFile("backup")
+if err != nil {
+w.WriteHeader(http.StatusBadRequest)
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "No backup file provided"})
+return
+}
+defer file.Close()
+
+var backup map[string]interface{}
+if err := json.NewDecoder(file).Decode(&backup); err != nil {
+w.WriteHeader(http.StatusBadRequest)
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON in backup file"})
+return
+}
+
+restoreFromBackupMap(backup)
+addLog("📦 Settings restored from backup file via admin panel", "SECURITY")
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Settings restored successfully"})
+}
+
+func restoreFromBackupMap(backup map[string]interface{}) {
+if configData, ok := backup["config"]; ok {
+if configBytes, err := json.Marshal(configData); err == nil {
+var restoredConfig AutoConfig
+if err := json.Unmarshal(configBytes, &restoredConfig); err == nil {
+config = restoredConfig
+go saveConfig()
+}
+}
+}
+if keysData, ok := backup["api_keys"]; ok {
+if keysBytes, err := json.Marshal(keysData); err == nil {
+var restoredKeys []APIKey
+if err := json.Unmarshal(keysBytes, &restoredKeys); err == nil {
+apiKeysMu.Lock()
+apiKeys = restoredKeys
+apiKeysMu.Unlock()
+go saveAPIKeys()
+}
+}
+}
 }
