@@ -59,6 +59,8 @@ clients   = make(map[string]*whatsmeow.Client)
 clientsMu sync.RWMutex
 )
 
+var configMu sync.RWMutex
+
 var (
 messageHistory []MessageLogEntry
 historyMu      sync.Mutex
@@ -177,14 +179,18 @@ LockUntil time.Time `json:"lock_until,omitempty"`
 
 // BulkSendJob tracks a bulk CSV send operation
 type BulkSendJob struct {
-ID        string    `json:"id"`
-Status    string    `json:"status"`
-Total     int       `json:"total"`
-Sent      int       `json:"sent"`
-Failed    int       `json:"failed"`
-Progress  int       `json:"progress"`
-CreatedAt time.Time `json:"created_at"`
-UpdatedAt time.Time `json:"updated_at"`
+ID         string       `json:"id"`
+Status     string       `json:"status"`
+Total      int          `json:"total"`
+Sent       int          `json:"sent"`
+Failed     int          `json:"failed"`
+Progress   int          `json:"progress"`
+CreatedAt  time.Time    `json:"created_at"`
+UpdatedAt  time.Time    `json:"updated_at"`
+CancelChan chan struct{} `json:"-"`
+PauseChan  chan bool     `json:"-"`
+cancelOnce sync.Once    `json:"-"`
+Paused     bool         `json:"paused"`
 }
 
 var (
@@ -340,20 +346,28 @@ fmt.Println(logEntry)
 func isSendingSafe(phoneNumber string) (bool, string) {
 messageMu.Lock()
 defer messageMu.Unlock()
+
+configMu.RLock()
+dailyLimit := config.DailySendLimit
+hourlyLimit := config.HourlySendLimit
+minSendDelay := config.MinSendDelay
+safeMode := config.SafeMode
+configMu.RUnlock()
+
 now := time.Now()
 today := now.Format("2006-01-02")
 hour := now.Format("2006-01-02-15")
-if config.DailySendLimit > 0 && messageStats.DailyCounts[today] >= config.DailySendLimit {
-return false, fmt.Sprintf("Daily limit reached (%d messages)", config.DailySendLimit)
+if dailyLimit > 0 && messageStats.DailyCounts[today] >= dailyLimit {
+return false, fmt.Sprintf("Daily limit reached (%d messages)", dailyLimit)
 }
-if config.HourlySendLimit > 0 && messageStats.HourlyCounts[hour] >= config.HourlySendLimit {
-return false, fmt.Sprintf("Hourly limit reached (%d messages)", config.HourlySendLimit)
+if hourlyLimit > 0 && messageStats.HourlyCounts[hour] >= hourlyLimit {
+return false, fmt.Sprintf("Hourly limit reached (%d messages)", hourlyLimit)
 }
-minDelay := time.Duration(config.MinSendDelay) * time.Second
-if config.MinSendDelay > 0 && time.Since(lastMessageTime) < minDelay {
-return false, fmt.Sprintf("Too fast sending (min delay: %ds)", config.MinSendDelay)
+minDelay := time.Duration(minSendDelay) * time.Second
+if minSendDelay > 0 && time.Since(lastMessageTime) < minDelay {
+return false, fmt.Sprintf("Too fast sending (min delay: %ds)", minSendDelay)
 }
-if config.SafeMode {
+if safeMode {
 if messageStats.DailyCounts[today] >= 50 {
 return false, "Safe mode: Daily limit of 50 messages reached"
 }
@@ -365,8 +379,10 @@ return true, ""
 }
 
 func calculateSmartDelay() time.Duration {
+configMu.RLock()
 minDelay := config.MinSendDelay
 maxDelay := config.MaxSendDelay
+configMu.RUnlock()
 if minDelay == 0 {
 minDelay = 3
 }
@@ -419,6 +435,7 @@ delete(messageStats.HourlyCounts, hourKey)
 func loadConfig() {
 data, err := os.ReadFile("config.json")
 if err != nil {
+configMu.Lock()
 config = AutoConfig{
 Enabled:            false,
 Numbers:            "",
@@ -436,29 +453,41 @@ HourlySendLimit:    20,
 RandomizeUserAgent: true,
 SafeMode:           true,
 }
+configMu.Unlock()
 saveConfig()
 addLog("\U0001f512 Security-enhanced configuration created", "SECURITY")
 return
 }
-if err := json.Unmarshal(data, &config); err != nil {
+var newConfig AutoConfig
+if err := json.Unmarshal(data, &newConfig); err != nil {
 addLog("Error loading config: "+err.Error(), "ERROR")
+return
 }
-if config.MinSendDelay == 0 {
-config.MinSendDelay = 3
+if newConfig.MinSendDelay == 0 {
+newConfig.MinSendDelay = 3
 }
-if config.MaxSendDelay == 0 {
-config.MaxSendDelay = 12
+if newConfig.MaxSendDelay == 0 {
+newConfig.MaxSendDelay = 12
 }
-if config.DailySendLimit == 0 {
-config.DailySendLimit = 100
+if newConfig.DailySendLimit == 0 {
+newConfig.DailySendLimit = 100
 }
-if config.HourlySendLimit == 0 {
-config.HourlySendLimit = 20
+if newConfig.HourlySendLimit == 0 {
+newConfig.HourlySendLimit = 20
 }
+configMu.Lock()
+config = newConfig
+configMu.Unlock()
 }
 
 func saveConfig() {
-data, _ := json.MarshalIndent(config, "", "  ")
+configMu.RLock()
+data, err := json.MarshalIndent(config, "", "  ")
+configMu.RUnlock()
+if err != nil {
+addLog("Error saving config: "+err.Error(), "ERROR")
+return
+}
 if err := os.WriteFile("config.json", data, 0644); err != nil {
 addLog("Error saving config: "+err.Error(), "ERROR")
 }
@@ -830,7 +859,11 @@ writeToSupabase("api_keys", map[string]interface{}{
 
 
 func fireWebhook(payload map[string]interface{}) {
-if config.WebhookURL == "" {
+configMu.RLock()
+webhookURL := config.WebhookURL
+webhookSecret := config.WebhookSecret
+configMu.RUnlock()
+if webhookURL == "" {
 return
 }
 body, err := json.Marshal(payload)
@@ -840,14 +873,14 @@ return
 }
 for attempt := 1; attempt <= 3; attempt++ {
 httpClient := &http.Client{Timeout: 10 * time.Second}
-req, err := http.NewRequest(http.MethodPost, config.WebhookURL, strings.NewReader(string(body)))
+req, err := http.NewRequest(http.MethodPost, webhookURL, strings.NewReader(string(body)))
 if err != nil {
 addLog("Webhook request error: "+err.Error(), "ERROR")
 return
 }
 req.Header.Set("Content-Type", "application/json")
-if config.WebhookSecret != "" {
-mac := hmac.New(sha256.New, []byte(config.WebhookSecret))
+if webhookSecret != "" {
+mac := hmac.New(sha256.New, []byte(webhookSecret))
 mac.Write(body)
 sig := hex.EncodeToString(mac.Sum(nil))
 req.Header.Set("X-Webhook-Signature", "sha256="+sig)
@@ -896,7 +929,14 @@ msgText = ext.GetText()
 
 addToHistory("received", sender, msgText, "success")
 
-if config.WebhookEnabled && config.WebhookURL != "" {
+configMu.RLock()
+webhookEnabled := config.WebhookEnabled
+webhookURL := config.WebhookURL
+replyEnable := config.ReplyEnable
+replyText := config.ReplyText
+configMu.RUnlock()
+
+if webhookEnabled && webhookURL != "" {
 go fireWebhook(map[string]interface{}{
 "event":     "message_received",
 "sender":    sender,
@@ -905,8 +945,8 @@ go fireWebhook(map[string]interface{}{
 })
 }
 
-if !v.Info.IsGroup && config.ReplyEnable && config.ReplyText != "" {
-go sendSecureAutoReply(v.Info.Sender, config.ReplyText, sender)
+if !v.Info.IsGroup && replyEnable && replyText != "" {
+go sendSecureAutoReply(v.Info.Sender, replyText, sender)
 }
 }
 case *events.Connected:
@@ -986,8 +1026,10 @@ return
 }
 replyDelay := time.Duration(1+mathrand.Intn(4)) * time.Second
 time.Sleep(replyDelay)
+configMu.RLock()
 maxRetries := config.MaxRetries
 retryDelay := time.Duration(config.RetryDelay) * time.Second
+configMu.RUnlock()
 for attempt := 1; attempt <= maxRetries; attempt++ {
 ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 if attempt == 1 {
@@ -1019,14 +1061,19 @@ break
 }
 
 func startSecureAutoSend() {
-if !config.Enabled || config.Message == "" || config.Numbers == "" {
+configMu.RLock()
+enabled := config.Enabled
+message := config.Message
+numbers := config.Numbers
+configMu.RUnlock()
+if !enabled || message == "" || numbers == "" {
 return
 }
 addLog("\u23f3 Starting secure auto-send with anti-ban protection...", "SECURITY")
 initialDelay := time.Duration(30+mathrand.Intn(60)) * time.Second
 addLog(fmt.Sprintf("\U0001f512 Waiting %v before starting (security measure)", initialDelay), "SECURITY")
 time.Sleep(initialDelay)
-rawNumbers := strings.FieldsFunc(config.Numbers, func(r rune) bool {
+rawNumbers := strings.FieldsFunc(numbers, func(r rune) bool {
 return r == ',' || r == '\n' || r == '\r' || r == ' ' || r == ';'
 })
 successCount := 0
@@ -1054,7 +1101,7 @@ skippedCount++
 continue
 }
 addLog(fmt.Sprintf("\U0001f4e4 Securely sending to %s (%d/%d)", num, i+1, len(rawNumbers)))
-success := sendSecureMessage(num, config.Message)
+success := sendSecureMessage(num, message)
 if success {
 successCount++
 } else {
@@ -1073,21 +1120,28 @@ successCount, failCount, skippedCount), "SECURITY")
 }
 
 func sendSecureMessage(phone, message string) bool {
+return sendSecureMessageWithClient(phone, message, client)
+}
+
+func sendSecureMessageWithClient(phone, message string, c *whatsmeow.Client) bool {
 targetJID := types.NewJID(phone, "s.whatsapp.net")
 msg := &waProto.Message{Conversation: proto.String(message)}
+configMu.RLock()
 maxRetries := config.MaxRetries
 retryDelay := time.Duration(config.RetryDelay) * time.Second
+randomizeUA := config.RandomizeUserAgent
+configMu.RUnlock()
 if safe, reason := isSendingSafe(phone); !safe {
 addLog(fmt.Sprintf("\U0001f512 Send blocked to %s: %s", phone, reason), "SECURITY")
 return false
 }
 for attempt := 1; attempt <= maxRetries; attempt++ {
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-if config.RandomizeUserAgent {
+if randomizeUA {
 userAgent := getRandomUserAgent()
 addLog(fmt.Sprintf("\U0001f504 Using user agent: %s", userAgent), "SECURITY")
 }
-resp, err := client.SendMessage(ctx, targetJID, msg)
+resp, err := c.SendMessage(ctx, targetJID, msg)
 if err != nil {
 cancel()
 addLog(fmt.Sprintf("\u274c Secure send attempt %d to %s failed: %v", attempt, phone, err), "WARN")
@@ -1212,6 +1266,9 @@ http.HandleFunc("/api/keys", authMiddleware(handleAPIKeys))
 http.HandleFunc("/api/security/lockouts", authMiddleware(handleLockouts))
 http.HandleFunc("/api/bulk-send", authMiddleware(handleBulkSend))
 http.HandleFunc("/api/bulk-send/jobs", authMiddleware(handleBulkSendJobs))
+http.HandleFunc("/api/bulk-send/jobs/cancel", authMiddleware(handleBulkJobCancel))
+http.HandleFunc("/api/bulk-send/jobs/pause", authMiddleware(handleBulkJobPause))
+http.HandleFunc("/api/bulk-send/jobs/resume", authMiddleware(handleBulkJobResume))
 http.HandleFunc("/api/delivery", authMiddleware(handleDelivery))
 http.HandleFunc("/api/restart", authMiddleware(handleRestart))
 http.HandleFunc("/api/devices/disconnect-all", authMiddleware(handleDisconnectAll))
@@ -1378,7 +1435,10 @@ if !targetClient.IsConnected() {
 targetClient.Connect()
 }
 clientName := "Chrome (Linux)"
-if config.RandomizeUserAgent {
+configMu.RLock()
+randomizeUA := config.RandomizeUserAgent
+configMu.RUnlock()
+if randomizeUA {
 clientOptions := []string{"Chrome (Linux)", "Chrome (Windows)", "Chrome (macOS)"}
 clientName = clientOptions[mathrand.Intn(len(clientOptions))]
 }
@@ -1393,7 +1453,17 @@ w.Write([]byte(code))
 }
 
 func handleIsLinked(w http.ResponseWriter, r *http.Request) {
-if client.Store.ID != nil {
+deviceID := r.URL.Query().Get("device")
+if deviceID == "" {
+deviceID = "default"
+}
+clientsMu.RLock()
+c, ok := clients[deviceID]
+clientsMu.RUnlock()
+if !ok || c == nil {
+c = client
+}
+if c != nil && c.Store.ID != nil {
 w.Write([]byte("true"))
 } else {
 w.Write([]byte("false"))
@@ -1402,15 +1472,29 @@ w.Write([]byte("false"))
 
 func handleApiInfo(w http.ResponseWriter, r *http.Request) {
 w.Header().Set("Content-Type", "application/json")
-if client.Store.ID != nil {
+deviceID := r.URL.Query().Get("device")
+if deviceID == "" {
+deviceID = "default"
+}
+clientsMu.RLock()
+c, ok := clients[deviceID]
+clientsMu.RUnlock()
+if !ok || c == nil {
+c = client
+}
+configMu.RLock()
+safeMode := config.SafeMode
+configMu.RUnlock()
+if c != nil && c.Store.ID != nil {
 json.NewEncoder(w).Encode(APIResponse{
 Success: true,
 Data: map[string]interface{}{
 "status":          "Connected",
-"jid":             client.Store.ID.User,
-"connected":       client.IsConnected(),
+"jid":             c.Store.ID.User,
+"connected":       c.IsConnected(),
 "security_active": true,
-"safe_mode":       config.SafeMode,
+"safe_mode":       safeMode,
+"device_id":       deviceID,
 },
 })
 } else {
@@ -1421,6 +1505,7 @@ Data: map[string]interface{}{
 "jid":             "None",
 "connected":       false,
 "security_active": true,
+"device_id":       deviceID,
 },
 })
 }
@@ -1449,9 +1534,12 @@ json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Not logged in"})
 func handleSecureConfig(w http.ResponseWriter, r *http.Request) {
 w.Header().Set("Content-Type", "application/json")
 if r.Method == http.MethodGet {
+configMu.RLock()
+currentConfig := config
+configMu.RUnlock()
 json.NewEncoder(w).Encode(APIResponse{
 Success: true,
-Data:    config,
+Data:    currentConfig,
 Warning: "Security features active - some limits may apply",
 })
 } else if r.Method == http.MethodPost {
@@ -1468,7 +1556,9 @@ if newConfig.MinSendDelay < 3 {
 newConfig.MinSendDelay = 3
 addLog("\U0001f512 Min send delay enforced to 3 seconds", "SECURITY")
 }
+configMu.Lock()
 config = newConfig
+configMu.Unlock()
 saveConfig()
 addLog("\u2699\ufe0f Secure configuration updated by admin", "SECURITY")
 json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Configuration saved with security enhancements"})
@@ -1514,7 +1604,10 @@ clientsMu.RUnlock()
 if !ok || targetClient == nil {
 targetClient = client
 }
-if deviceID != "default" && ok && targetClient != nil {
+if targetClient == nil || !targetClient.IsConnected() {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Device not connected"})
+return
+}
 targetJID := types.NewJID(targetPhone, "s.whatsapp.net")
 msg := &waProto.Message{Conversation: proto.String(msgText)}
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1541,13 +1634,6 @@ go writeToSupabase("message_history", map[string]interface{}{
 "status":    "failed",
 })
 }
-json.NewEncoder(w).Encode(APIResponse{
-Success: success,
-Message: fmt.Sprintf("Message %s", map[bool]string{true: "sent securely", false: "failed to send"}[success]),
-})
-return
-}
-success := sendSecureMessage(targetPhone, msgText)
 json.NewEncoder(w).Encode(APIResponse{
 Success: success,
 Message: fmt.Sprintf("Message %s", map[bool]string{true: "sent securely", false: "failed to send"}[success]),
@@ -1800,6 +1886,11 @@ Data: map[string]interface{}{
 
 func handleSecureStats(w http.ResponseWriter, r *http.Request) {
 w.Header().Set("Content-Type", "application/json")
+configMu.RLock()
+safeMode := config.SafeMode
+dailySendLimit := config.DailySendLimit
+hourlySendLimit := config.HourlySendLimit
+configMu.RUnlock()
 statsMu.Lock()
 securityStatus := "SECURE"
 if messageStats.BanWarnings > 10 {
@@ -1807,13 +1898,14 @@ securityStatus = "CRITICAL"
 } else if messageStats.BanWarnings > 5 {
 securityStatus = "WARNING"
 }
+now := time.Now()
 enhancedStats := map[string]interface{}{
 "message_stats":    messageStats,
 "security_status":  securityStatus,
 "ban_warnings":     messageStats.BanWarnings,
-"safe_mode":        config.SafeMode,
-"daily_remaining":  config.DailySendLimit - messageStats.DailyCounts[time.Now().Format("2006-01-02")],
-"hourly_remaining": config.HourlySendLimit - messageStats.HourlyCounts[time.Now().Format("2006-01-02-15")],
+"safe_mode":        safeMode,
+"daily_remaining":  dailySendLimit - messageStats.DailyCounts[now.Format("2006-01-02")],
+"hourly_remaining": hourlySendLimit - messageStats.HourlyCounts[now.Format("2006-01-02-15")],
 }
 json.NewEncoder(w).Encode(APIResponse{Success: true, Data: enhancedStats})
 statsMu.Unlock()
@@ -1839,14 +1931,24 @@ handleSecureStats(w, r)
 
 func handleSecurityStatus(w http.ResponseWriter, r *http.Request) {
 w.Header().Set("Content-Type", "application/json")
+configMu.RLock()
+safeMode := config.SafeMode
+randomizeUA := config.RandomizeUserAgent
+dailyLimit := config.DailySendLimit
+hourlyLimit := config.HourlySendLimit
+minSendDelay := config.MinSendDelay
+configMu.RUnlock()
+statsMu.Lock()
+banWarnings := messageStats.BanWarnings
+statsMu.Unlock()
 securityInfo := map[string]interface{}{
-"safe_mode_active":    config.SafeMode,
-"ban_warnings":        messageStats.BanWarnings,
+"safe_mode_active":    safeMode,
+"ban_warnings":        banWarnings,
 "rate_limiting":       true,
-"user_agent_rotation": config.RandomizeUserAgent,
-"daily_limit":         config.DailySendLimit,
-"hourly_limit":        config.HourlySendLimit,
-"min_send_delay":      config.MinSendDelay,
+"user_agent_rotation": randomizeUA,
+"daily_limit":         dailyLimit,
+"hourly_limit":        hourlyLimit,
+"min_send_delay":      minSendDelay,
 "last_security_check": time.Now(),
 "security_level":      "HIGH",
 }
@@ -2140,14 +2242,27 @@ json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "No valid rows fo
 return
 }
 
+deviceID := r.FormValue("device")
+if deviceID == "" {
+deviceID = "default"
+}
+clientsMu.RLock()
+targetClient, ok := clients[deviceID]
+clientsMu.RUnlock()
+if !ok || targetClient == nil {
+targetClient = client
+}
+
 idBytes := make([]byte, 8)
 rand.Read(idBytes)
 job := &BulkSendJob{
-ID:        fmt.Sprintf("%x", idBytes),
-Status:    "running",
-Total:     len(rows),
-CreatedAt: time.Now(),
-UpdatedAt: time.Now(),
+ID:         fmt.Sprintf("%x", idBytes),
+Status:     "running",
+Total:      len(rows),
+CreatedAt:  time.Now(),
+UpdatedAt:  time.Now(),
+CancelChan: make(chan struct{}),
+PauseChan:  make(chan bool, 1),
 }
 bulkJobsMu.Lock()
 bulkJobs = append(bulkJobs, job)
@@ -2164,6 +2279,49 @@ go writeToSupabase("bulk_jobs", map[string]interface{}{
 
 go func() {
 for _, row := range rows {
+// Check for cancellation
+select {
+case <-job.CancelChan:
+bulkJobsMu.Lock()
+job.Status = "cancelled"
+job.UpdatedAt = time.Now()
+bulkJobsMu.Unlock()
+go writeToSupabaseUpsert("bulk_jobs", map[string]interface{}{
+"id":     job.ID,
+"status": "cancelled",
+})
+return
+default:
+}
+
+// Non-blocking check for pause signal
+select {
+case paused := <-job.PauseChan:
+if paused {
+// Block until resumed or cancelled
+pauseLoop:
+for {
+select {
+case <-job.CancelChan:
+bulkJobsMu.Lock()
+job.Status = "cancelled"
+job.UpdatedAt = time.Now()
+bulkJobsMu.Unlock()
+go writeToSupabaseUpsert("bulk_jobs", map[string]interface{}{
+"id":     job.ID,
+"status": "cancelled",
+})
+return
+case p := <-job.PauseChan:
+if !p {
+break pauseLoop
+}
+}
+}
+}
+default:
+}
+
 phone := strings.ReplaceAll(row.phone, "+", "")
 phone = strings.ReplaceAll(phone, "-", "")
 phone = strings.ReplaceAll(phone, " ", "")
@@ -2175,7 +2333,7 @@ job.UpdatedAt = time.Now()
 bulkJobsMu.Unlock()
 continue
 }
-ok := sendSecureMessage(phone, row.message)
+ok := sendSecureMessageWithClient(phone, row.message, targetClient)
 bulkJobsMu.Lock()
 if ok {
 job.Sent++
@@ -2244,6 +2402,94 @@ http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 }
 }
 
+func handleBulkJobCancel(w http.ResponseWriter, r *http.Request) {
+if r.Method != http.MethodPost {
+http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+return
+}
+w.Header().Set("Content-Type", "application/json")
+id := r.URL.Query().Get("id")
+bulkJobsMu.Lock()
+var found *BulkSendJob
+for _, j := range bulkJobs {
+if j.ID == id {
+found = j
+break
+}
+}
+bulkJobsMu.Unlock()
+if found == nil {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Job not found"})
+return
+}
+if found.Status != "running" && found.Status != "paused" {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Job is not running"})
+return
+}
+found.cancelOnce.Do(func() { close(found.CancelChan) })
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Job cancelled"})
+}
+
+func handleBulkJobPause(w http.ResponseWriter, r *http.Request) {
+if r.Method != http.MethodPost {
+http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+return
+}
+w.Header().Set("Content-Type", "application/json")
+id := r.URL.Query().Get("id")
+bulkJobsMu.Lock()
+var found *BulkSendJob
+for _, j := range bulkJobs {
+if j.ID == id {
+found = j
+break
+}
+}
+if found != nil {
+found.Paused = true
+found.Status = "paused"
+found.UpdatedAt = time.Now()
+}
+bulkJobsMu.Unlock()
+if found == nil {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Job not found"})
+return
+}
+found.PauseChan <- true
+go writeToSupabaseUpsert("bulk_jobs", map[string]interface{}{"id": found.ID, "status": "paused"})
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Job paused"})
+}
+
+func handleBulkJobResume(w http.ResponseWriter, r *http.Request) {
+if r.Method != http.MethodPost {
+http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+return
+}
+w.Header().Set("Content-Type", "application/json")
+id := r.URL.Query().Get("id")
+bulkJobsMu.Lock()
+var found *BulkSendJob
+for _, j := range bulkJobs {
+if j.ID == id {
+found = j
+break
+}
+}
+if found != nil {
+found.Paused = false
+found.Status = "running"
+found.UpdatedAt = time.Now()
+}
+bulkJobsMu.Unlock()
+if found == nil {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Job not found"})
+return
+}
+found.PauseChan <- false
+go writeToSupabaseUpsert("bulk_jobs", map[string]interface{}{"id": found.ID, "status": "running"})
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Job resumed"})
+}
+
 // handleDelivery handles GET /api/delivery?phone=...
 func handleDelivery(w http.ResponseWriter, r *http.Request) {
 w.Header().Set("Content-Type", "application/json")
@@ -2301,6 +2547,7 @@ func handleAutomation(w http.ResponseWriter, r *http.Request) {
 w.Header().Set("Content-Type", "application/json")
 switch r.Method {
 case http.MethodGet:
+configMu.RLock()
 data := map[string]interface{}{
 "enabled":      config.Enabled,
 "numbers":      config.Numbers,
@@ -2309,6 +2556,7 @@ data := map[string]interface{}{
 "reply_text":   config.ReplyText,
 "send_delay":   config.SendDelay,
 }
+configMu.RUnlock()
 json.NewEncoder(w).Encode(APIResponse{Success: true, Data: data})
 case http.MethodPost:
 var body map[string]interface{}
@@ -2317,6 +2565,7 @@ w.WriteHeader(http.StatusBadRequest)
 json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON"})
 return
 }
+configMu.Lock()
 if v, ok := body["enabled"].(bool); ok {
 config.Enabled = v
 }
@@ -2335,6 +2584,7 @@ config.ReplyText = v
 if v, ok := body["send_delay"].(float64); ok {
 config.SendDelay = int(v)
 }
+configMu.Unlock()
 go saveConfig()
 addLog("⚙️ Automation settings updated via admin panel", "INFO")
 json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Automation settings saved"})
@@ -2389,7 +2639,9 @@ if configData, ok := backup["config"]; ok {
 if configBytes, err := json.Marshal(configData); err == nil {
 var restoredConfig AutoConfig
 if err := json.Unmarshal(configBytes, &restoredConfig); err == nil {
+configMu.Lock()
 config = restoredConfig
+configMu.Unlock()
 go saveConfig()
 }
 }
