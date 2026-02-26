@@ -33,6 +33,8 @@ waLog "go.mau.fi/whatsmeow/util/log"
 "google.golang.org/protobuf/proto"
 )
 
+const serverVersion = "2.0.0"
+
 var (
 client            *whatsmeow.Client
 systemLogs        []string
@@ -886,16 +888,25 @@ srv := &http.Server{
 Addr:    ":" + port,
 Handler: rateLimitMiddleware(securityHeadersMiddleware(http.DefaultServeMux)),
 }
-tlsCert := os.Getenv("TLS_CERT")
-tlsKey := os.Getenv("TLS_KEY")
+tlsCert := os.Getenv("TLS_CERT_FILE")
+tlsKey := os.Getenv("TLS_KEY_FILE")
 go func() {
 addLog(fmt.Sprintf("\U0001f310 Secure server running on port %s", port), "SECURITY")
 var serveErr error
 if tlsCert != "" && tlsKey != "" {
-srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+srv.TLSConfig = &tls.Config{
+MinVersion: tls.VersionTLS12,
+CipherSuites: []uint16{
+tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+},
+}
 addLog("\U0001f510 TLS enabled", "SECURITY")
 serveErr = srv.ListenAndServeTLS(tlsCert, tlsKey)
 } else {
+addLog("ℹ️ TLS not configured - running HTTP only", "INFO")
 serveErr = srv.ListenAndServe()
 }
 if serveErr != nil && serveErr != http.ErrServerClosed {
@@ -983,7 +994,7 @@ connected := client != nil && client.IsConnected()
 json.NewEncoder(w).Encode(map[string]interface{}{
 "status":             "ok",
 "uptime_seconds":     int(time.Since(serverStartTime).Seconds()),
-"version":            "2.0.0",
+"version":            serverVersion,
 "whatsapp_connected": connected,
 "devices_count":      devCount,
 "timestamp":          time.Now().UTC().Format(time.RFC3339),
@@ -1209,13 +1220,18 @@ if req.URL == "" {
 json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "URL is required"})
 return
 }
-resp, err := http.Get(req.URL)
+dlClient := &http.Client{Timeout: 30 * time.Second}
+resp, err := dlClient.Get(req.URL)
 if err != nil || resp.StatusCode != http.StatusOK {
+if err == nil {
+resp.Body.Close()
+}
 json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Failed to download media"})
 return
 }
 defer resp.Body.Close()
-data, err := io.ReadAll(resp.Body)
+const maxMediaSize = 50 * 1024 * 1024 // 50 MB
+data, err := io.ReadAll(io.LimitReader(resp.Body, maxMediaSize))
 if err != nil {
 json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Failed to read media"})
 return

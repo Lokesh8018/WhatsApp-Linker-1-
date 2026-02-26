@@ -3,6 +3,7 @@ module wa-linker
 go 1.25.0
 
 require (
+	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/mattn/go-sqlite3 v1.14.34
 	go.mau.fi/whatsmeow v0.0.0-20260219150138-7ae702b1eed4
 	google.golang.org/protobuf v1.36.11
@@ -13,7 +14,6 @@ require (
 	github.com/beeper/argo-go v1.1.2 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/elliotchance/orderedmap/v3 v3.1.0 // indirect
-	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
