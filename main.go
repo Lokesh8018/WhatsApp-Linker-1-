@@ -1,6 +1,7 @@
 package main
 
 import (
+"bytes"
 "context"
 "crypto/hmac"
 "crypto/rand"
@@ -242,6 +243,7 @@ apiKeysMu.RUnlock()
 if err := os.WriteFile("apikeys.json", data, 0600); err != nil {
 addLog("Error saving apikeys.json: "+err.Error(), "ERROR")
 }
+go syncAPIKeysToSupabase()
 }
 
 func validateAPIKey(key string) *APIKey {
@@ -673,6 +675,7 @@ return
 statsMu.Lock()
 today := time.Now().Format("2006-01-02")
 sent := messageStats.DailyCounts[today]
+totalSent := messageStats.TotalSent
 failed := messageStats.TotalFailed
 received := messageStats.TotalReceived
 statsMu.Unlock()
@@ -682,6 +685,13 @@ today, sent, failed, received)
 if err != nil {
 addLog("Failed to persist stats: "+err.Error(), "ERROR")
 }
+go writeToSupabaseUpsert("stats", map[string]interface{}{
+"id":                1,
+"messages_sent":     totalSent,
+"messages_received": received,
+"active_devices":    countConnectedDevices(),
+"updated_at":        time.Now().UTC().Format(time.RFC3339),
+})
 }
 
 func addToHistory(direction, phone, message, status string, msgID ...string) {
@@ -706,6 +716,118 @@ if len(messageHistory) > 1000 {
 messageHistory = messageHistory[:1000]
 }
 }
+
+// supabaseAllowedTables is the set of tables that may be written to via Supabase REST.
+var supabaseAllowedTables = map[string]bool{
+"stats": true, "message_history": true, "devices": true,
+"api_keys": true, "bulk_jobs": true, "scheduled_messages": true,
+}
+
+// supabaseDeleteAllFilter is a Supabase filter that matches every row (used for bulk deletes).
+const supabaseDeleteAllFilter = "id=neq.00000000-0000-0000-0000-000000000000"
+
+func writeToSupabase(table string, data map[string]interface{}) {
+if !supabaseAllowedTables[table] {
+return
+}
+supabaseURL := os.Getenv("SUPABASE_URL")
+serviceKey := os.Getenv("SUPABASE_SERVICE_KEY")
+if supabaseURL == "" || serviceKey == "" {
+return
+}
+body, err := json.Marshal(data)
+if err != nil {
+return
+}
+req, err := http.NewRequest("POST", supabaseURL+"/rest/v1/"+table, bytes.NewBuffer(body))
+if err != nil {
+return
+}
+req.Header.Set("Authorization", "Bearer "+serviceKey)
+req.Header.Set("apikey", serviceKey)
+req.Header.Set("Content-Type", "application/json")
+resp, err := http.DefaultClient.Do(req)
+if err != nil {
+return
+}
+defer resp.Body.Close()
+io.Copy(io.Discard, resp.Body)
+}
+
+func writeToSupabaseUpsert(table string, data map[string]interface{}) {
+if !supabaseAllowedTables[table] {
+return
+}
+supabaseURL := os.Getenv("SUPABASE_URL")
+serviceKey := os.Getenv("SUPABASE_SERVICE_KEY")
+if supabaseURL == "" || serviceKey == "" {
+return
+}
+body, err := json.Marshal(data)
+if err != nil {
+return
+}
+req, err := http.NewRequest("POST", supabaseURL+"/rest/v1/"+table, bytes.NewBuffer(body))
+if err != nil {
+return
+}
+req.Header.Set("Authorization", "Bearer "+serviceKey)
+req.Header.Set("apikey", serviceKey)
+req.Header.Set("Content-Type", "application/json")
+req.Header.Set("Prefer", "resolution=merge-duplicates,return=minimal")
+resp, err := http.DefaultClient.Do(req)
+if err != nil {
+return
+}
+defer resp.Body.Close()
+io.Copy(io.Discard, resp.Body)
+}
+
+func countConnectedDevices() int {
+clientsMu.RLock()
+defer clientsMu.RUnlock()
+count := 0
+for _, c := range clients {
+if c != nil && c.IsConnected() {
+count++
+}
+}
+return count
+}
+
+func syncAPIKeysToSupabase() {
+supabaseURL := os.Getenv("SUPABASE_URL")
+serviceKey := os.Getenv("SUPABASE_SERVICE_KEY")
+if supabaseURL == "" || serviceKey == "" {
+return
+}
+// Delete all existing rows then re-insert active keys so Supabase stays consistent.
+req, err := http.NewRequest("DELETE", supabaseURL+"/rest/v1/api_keys?"+supabaseDeleteAllFilter, nil)
+if err != nil {
+return
+}
+req.Header.Set("Authorization", "Bearer "+serviceKey)
+req.Header.Set("apikey", serviceKey)
+if resp, err := http.DefaultClient.Do(req); err == nil {
+defer resp.Body.Close()
+io.Copy(io.Discard, resp.Body)
+}
+apiKeysMu.RLock()
+keys := make([]APIKey, len(apiKeys))
+copy(keys, apiKeys)
+apiKeysMu.RUnlock()
+for _, k := range keys {
+if !k.Active {
+continue
+}
+writeToSupabase("api_keys", map[string]interface{}{
+"name":       k.Name,
+"key":        k.Key,
+"created_at": k.CreatedAt.UTC().Format(time.RFC3339),
+})
+}
+}
+
 
 func fireWebhook(payload map[string]interface{}) {
 if config.WebhookURL == "" {
@@ -789,13 +911,35 @@ go sendSecureAutoReply(v.Info.Sender, config.ReplyText, sender)
 }
 case *events.Connected:
 addLog("\U0001f7e2 Securely connected to WhatsApp", "SECURITY")
+phone := ""
+if client != nil && client.Store != nil && client.Store.ID != nil {
+phone = client.Store.ID.User
+}
+go writeToSupabaseUpsert("devices", map[string]interface{}{
+"id":        "default",
+"name":      "WhatsApp Device",
+"phone":     phone,
+"status":    "connected",
+"last_seen": time.Now().UTC().Format(time.RFC3339),
+})
+go persistStats()
 case *events.PairSuccess:
 addLog("\u2705 Device securely linked with enhanced protection!", "SECURITY")
 go startSecureAutoSend()
 case *events.LoggedOut:
 addLog("\U0001f534 Device logged out", "SECURITY")
+go writeToSupabaseUpsert("devices", map[string]interface{}{
+"id":        "default",
+"status":    "logged_out",
+"last_seen": time.Now().UTC().Format(time.RFC3339),
+})
 case *events.Disconnected:
 addLog("\u26a0\ufe0f Connection lost, implementing secure reconnection...", "WARN")
+go writeToSupabaseUpsert("devices", map[string]interface{}{
+"id":        "default",
+"status":    "disconnected",
+"last_seen": time.Now().UTC().Format(time.RFC3339),
+})
 statsMu.Lock()
 messageStats.BanWarnings++
 banWarnings := messageStats.BanWarnings
@@ -953,6 +1097,12 @@ strings.Contains(strings.ToLower(err.Error()), "rate limit") {
 addLog("\U0001f6a8 BAN WARNING: Detected ban-related error!", "SECURITY")
 messageStats.BanWarnings++
 addToHistory("sent", phone, message, "failed")
+go writeToSupabase("message_history", map[string]interface{}{
+"direction": "sent",
+"phone":     phone,
+"message":   message,
+"status":    "failed",
+})
 return false
 }
 if attempt < maxRetries {
@@ -962,12 +1112,25 @@ continue
 }
 updateMessageStats(false)
 addToHistory("sent", phone, message, "failed")
+go writeToSupabase("message_history", map[string]interface{}{
+"direction": "sent",
+"phone":     phone,
+"message":   message,
+"status":    "failed",
+})
 return false
 } else {
 cancel()
 addLog(fmt.Sprintf("\u2709\ufe0f Message securely sent to: %s", phone))
 updateMessageStats(true)
 addToHistory("sent", phone, message, "success", resp.ID)
+go writeToSupabase("message_history", map[string]interface{}{
+"direction": "sent",
+"phone":     phone,
+"message":   message,
+"status":    "sent",
+})
+go persistStats()
 messageMu.Lock()
 lastMessageTime = time.Now()
 messageMu.Unlock()
@@ -975,6 +1138,12 @@ return true
 }
 }
 addToHistory("sent", phone, message, "failed")
+go writeToSupabase("message_history", map[string]interface{}{
+"direction": "sent",
+"phone":     phone,
+"message":   message,
+"status":    "failed",
+})
 return false
 }
 
@@ -1015,7 +1184,7 @@ clients["default"] = client
 clientsMu.Unlock()
 go secureMessageScheduler()
 go func() {
-ticker := time.NewTicker(5 * time.Minute)
+ticker := time.NewTicker(1 * time.Minute)
 defer ticker.Stop()
 for range ticker.C {
 persistStats()
@@ -1351,9 +1520,22 @@ success := sendErr == nil
 if success {
 updateMessageStats(true)
 addToHistory("sent", targetPhone, msgText, "success")
+go writeToSupabase("message_history", map[string]interface{}{
+"direction": "sent",
+"phone":     targetPhone,
+"message":   msgText,
+"status":    "sent",
+})
+go persistStats()
 } else {
 updateMessageStats(false)
 addToHistory("sent", targetPhone, msgText, "failed")
+go writeToSupabase("message_history", map[string]interface{}{
+"direction": "sent",
+"phone":     targetPhone,
+"message":   msgText,
+"status":    "failed",
+})
 }
 json.NewEncoder(w).Encode(APIResponse{
 Success: success,
@@ -1713,6 +1895,13 @@ Status:      "pending",
 scheduleMu.Lock()
 scheduledMessages = append(scheduledMessages, msg)
 scheduleMu.Unlock()
+go writeToSupabase("scheduled_messages", map[string]interface{}{
+"id":           msg.ID,
+"phone":        msg.Phone,
+"message":      msg.Message,
+"scheduled_at": msg.ScheduledAt.UTC().Format(time.RFC3339),
+"status":       "pending",
+})
 addLog(fmt.Sprintf("\u23f0 Scheduled message added for %s at %s", req.Phone, scheduledAt.Format(time.RFC3339)), "INFO")
 json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Scheduled message added", Data: msg})
 } else {
@@ -1738,10 +1927,18 @@ continue
 if sendSecureMessage(msg.Phone, msg.Message) {
 scheduledMessages[i].Status = "sent"
 addLog(fmt.Sprintf("\u23f0 Scheduled message securely sent to %s", msg.Phone))
+go writeToSupabaseUpsert("scheduled_messages", map[string]interface{}{
+"id":     msg.ID,
+"status": "sent",
+})
 } else {
 scheduledMessages[i].Status = "failed"
 scheduledMessages[i].Attempts++
 addLog(fmt.Sprintf("\u274c Scheduled message failed to %s (attempt %d)", msg.Phone, scheduledMessages[i].Attempts), "ERROR")
+go writeToSupabaseUpsert("scheduled_messages", map[string]interface{}{
+"id":     msg.ID,
+"status": "failed",
+})
 }
 }
 if now.Sub(msg.ScheduledAt) > 48*time.Hour {
@@ -1928,6 +2125,15 @@ UpdatedAt: time.Now(),
 bulkJobsMu.Lock()
 bulkJobs = append(bulkJobs, job)
 bulkJobsMu.Unlock()
+go writeToSupabase("bulk_jobs", map[string]interface{}{
+"id":         job.ID,
+"status":     job.Status,
+"total":      job.Total,
+"progress":   job.Progress,
+"sent":       job.Sent,
+"failed":     job.Failed,
+"created_at": job.CreatedAt.UTC().Format(time.RFC3339),
+})
 
 go func() {
 for _, row := range rows {
@@ -1951,13 +2157,29 @@ job.Failed++
 }
 job.Progress = job.Sent + job.Failed
 job.UpdatedAt = time.Now()
+jobID, jobSent, jobFailed, jobProgress := job.ID, job.Sent, job.Failed, job.Progress
 bulkJobsMu.Unlock()
+go writeToSupabaseUpsert("bulk_jobs", map[string]interface{}{
+"id":       jobID,
+"progress": jobProgress,
+"sent":     jobSent,
+"failed":   jobFailed,
+"status":   "running",
+})
 time.Sleep(calculateSmartDelay())
 }
 bulkJobsMu.Lock()
 job.Status = "completed"
 job.UpdatedAt = time.Now()
+completedID, completedSent, completedFailed, completedProgress := job.ID, job.Sent, job.Failed, job.Progress
 bulkJobsMu.Unlock()
+go writeToSupabaseUpsert("bulk_jobs", map[string]interface{}{
+"id":       completedID,
+"status":   "completed",
+"sent":     completedSent,
+"failed":   completedFailed,
+"progress": completedProgress,
+})
 addLog(fmt.Sprintf("Bulk send job %s completed: %d sent, %d failed", job.ID, job.Sent, job.Failed), "INFO")
 }()
 
