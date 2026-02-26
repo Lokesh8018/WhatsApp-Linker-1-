@@ -7,6 +7,7 @@ import (
 "crypto/sha256"
 "crypto/tls"
 "database/sql"
+"encoding/csv"
 "encoding/hex"
 "encoding/json"
 "fmt"
@@ -137,12 +138,16 @@ JID       string `json:"jid"`
 }
 
 type MessageLogEntry struct {
-ID        string    `json:"id"`
-Direction string    `json:"direction"`
-Phone     string    `json:"phone"`
-Message   string    `json:"message"`
-Status    string    `json:"status"`
-Timestamp time.Time `json:"timestamp"`
+ID             string     `json:"id"`
+Direction      string     `json:"direction"`
+Phone          string     `json:"phone"`
+Message        string     `json:"message"`
+Status         string     `json:"status"`
+Timestamp      time.Time  `json:"timestamp"`
+MessageID      string     `json:"message_id,omitempty"`
+DeliveryStatus string     `json:"delivery_status,omitempty"`
+DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
+ReadAt         *time.Time `json:"read_at,omitempty"`
 }
 
 type ipRateLimiter struct {
@@ -150,6 +155,51 @@ mu       sync.Mutex
 requests map[string][]time.Time
 limit    int
 }
+
+// APIKey represents an API key for authentication
+type APIKey struct {
+ID        string    `json:"id"`
+Key       string    `json:"key"`
+Name      string    `json:"name"`
+Role      string    `json:"role"`
+CreatedAt time.Time `json:"created_at"`
+LastUsed  time.Time `json:"last_used,omitempty"`
+Active    bool      `json:"active"`
+}
+
+// LoginAttempt tracks failed login attempts per IP
+type LoginAttempt struct {
+Count     int       `json:"count"`
+LockedAt  time.Time `json:"locked_at,omitempty"`
+LockUntil time.Time `json:"lock_until,omitempty"`
+}
+
+// BulkSendJob tracks a bulk CSV send operation
+type BulkSendJob struct {
+ID        string    `json:"id"`
+Status    string    `json:"status"`
+Total     int       `json:"total"`
+Sent      int       `json:"sent"`
+Failed    int       `json:"failed"`
+Progress  int       `json:"progress"`
+CreatedAt time.Time `json:"created_at"`
+UpdatedAt time.Time `json:"updated_at"`
+}
+
+var (
+apiKeys   []APIKey
+apiKeysMu sync.RWMutex
+)
+
+var (
+loginAttempts   = make(map[string]*LoginAttempt)
+loginAttemptsMu sync.Mutex
+)
+
+var (
+bulkJobs   []*BulkSendJob
+bulkJobsMu sync.Mutex
+)
 
 func initSecurity() {
 userAgents = []string{
@@ -170,6 +220,86 @@ messageStats.DailyCounts = make(map[string]int)
 if messageStats.HourlyCounts == nil {
 messageStats.HourlyCounts = make(map[string]int)
 }
+loadAPIKeys()
+}
+
+func loadAPIKeys() {
+data, err := os.ReadFile("apikeys.json")
+if err != nil {
+return
+}
+apiKeysMu.Lock()
+defer apiKeysMu.Unlock()
+if err := json.Unmarshal(data, &apiKeys); err != nil {
+addLog("Error loading apikeys.json: "+err.Error(), "ERROR")
+}
+}
+
+func saveAPIKeys() {
+apiKeysMu.RLock()
+data, _ := json.MarshalIndent(apiKeys, "", "  ")
+apiKeysMu.RUnlock()
+if err := os.WriteFile("apikeys.json", data, 0600); err != nil {
+addLog("Error saving apikeys.json: "+err.Error(), "ERROR")
+}
+}
+
+func validateAPIKey(key string) *APIKey {
+apiKeysMu.RLock()
+idx := -1
+for i, k := range apiKeys {
+if k.Key == key && k.Active {
+idx = i
+break
+}
+}
+apiKeysMu.RUnlock()
+if idx < 0 {
+return nil
+}
+apiKeysMu.Lock()
+apiKeys[idx].LastUsed = time.Now()
+result := apiKeys[idx]
+apiKeysMu.Unlock()
+go saveAPIKeys()
+return &result
+}
+
+func recordFailedLogin(ip string) {
+loginAttemptsMu.Lock()
+defer loginAttemptsMu.Unlock()
+a, ok := loginAttempts[ip]
+if !ok {
+a = &LoginAttempt{}
+loginAttempts[ip] = a
+}
+a.Count++
+if a.Count >= 10 {
+a.LockedAt = time.Now()
+a.LockUntil = time.Now().Add(2 * time.Hour)
+} else if a.Count >= 5 {
+a.LockedAt = time.Now()
+a.LockUntil = time.Now().Add(30 * time.Minute)
+}
+}
+
+func isIPLocked(ip string) bool {
+loginAttemptsMu.Lock()
+defer loginAttemptsMu.Unlock()
+a, ok := loginAttempts[ip]
+if !ok {
+return false
+}
+if time.Now().Before(a.LockUntil) {
+return true
+}
+// Reset count after lock period
+if !a.LockUntil.IsZero() && time.Now().After(a.LockUntil) {
+a.Count = 0
+a.LockUntil = time.Time{}
+a.LockedAt = time.Time{}
+}
+return false
 }
 
 func generateDeviceID() string {
@@ -388,6 +518,24 @@ return err == nil && token.Valid
 
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 return func(w http.ResponseWriter, r *http.Request) {
+ip := r.RemoteAddr
+if idx := strings.LastIndex(ip, ":"); idx != -1 {
+ip = ip[:idx]
+}
+// API key via X-API-Key header (checked before JWT/Basic, bypasses lockout for valid keys)
+if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
+if k := validateAPIKey(apiKey); k != nil {
+next.ServeHTTP(w, r)
+return
+}
+addLog(fmt.Sprintf("Invalid API key attempt from: %s", r.RemoteAddr), "SECURITY")
+recordFailedLogin(ip)
+w.Header().Set("Content-Type", "application/json")
+w.WriteHeader(http.StatusUnauthorized)
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid API key"})
+return
+}
+// JWT token (bypasses lockout for valid tokens)
 authHeader := r.Header.Get("Authorization")
 if strings.HasPrefix(authHeader, "Bearer ") {
 tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
@@ -395,6 +543,13 @@ if jwtAuth(tokenStr) {
 next.ServeHTTP(w, r)
 return
 }
+}
+// Check IP lockout before Basic Auth
+if isIPLocked(ip) {
+w.Header().Set("Content-Type", "application/json")
+w.WriteHeader(http.StatusForbidden)
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "IP temporarily locked due to too many failed attempts"})
+return
 }
 user, pass, ok := r.BasicAuth()
 adminUser := os.Getenv("ADMIN_USER")
@@ -407,6 +562,7 @@ adminPass = "admin123"
 }
 if !ok || user != adminUser || pass != adminPass {
 addLog(fmt.Sprintf("Failed login attempt from: %s", r.RemoteAddr), "SECURITY")
+recordFailedLogin(ip)
 w.Header().Set("WWW-Authenticate", `Basic realm="Restricted Area"`)
 http.Error(w, "Unauthorized Access", http.StatusUnauthorized)
 return
@@ -549,18 +705,22 @@ addLog("Failed to persist stats: "+err.Error(), "ERROR")
 }
 }
 
-func addToHistory(direction, phone, message, status string) {
+func addToHistory(direction, phone, message, status string, msgID ...string) {
 historyMu.Lock()
 defer historyMu.Unlock()
 idBytes := make([]byte, 4)
 rand.Read(idBytes)
 entry := MessageLogEntry{
-ID:        fmt.Sprintf("%x", idBytes),
-Direction: direction,
-Phone:     phone,
-Message:   message,
-Status:    status,
-Timestamp: time.Now(),
+ID:             fmt.Sprintf("%x", idBytes),
+Direction:      direction,
+Phone:          phone,
+Message:        message,
+Status:         status,
+Timestamp:      time.Now(),
+DeliveryStatus: "pending",
+}
+if len(msgID) > 0 && msgID[0] != "" {
+entry.MessageID = msgID[0]
 }
 messageHistory = append([]MessageLogEntry{entry}, messageHistory...)
 if len(messageHistory) > 1000 {
@@ -669,6 +829,25 @@ addLog("\U0001f6a8 Stream error detected - possible security issue", "SECURITY")
 statsMu.Lock()
 messageStats.BanWarnings++
 statsMu.Unlock()
+case *events.Receipt:
+if v.Type == events.ReceiptTypeDelivered || v.Type == events.ReceiptTypeRead {
+now := time.Now()
+historyMu.Lock()
+for i := range messageHistory {
+for _, id := range v.MessageIDs {
+if messageHistory[i].MessageID == id {
+if v.Type == events.ReceiptTypeDelivered {
+messageHistory[i].DeliveryStatus = "delivered"
+messageHistory[i].DeliveredAt = &now
+} else if v.Type == events.ReceiptTypeRead {
+messageHistory[i].DeliveryStatus = "read"
+messageHistory[i].ReadAt = &now
+}
+}
+}
+}
+historyMu.Unlock()
+}
 }
 }
 
@@ -785,7 +964,8 @@ if config.RandomizeUserAgent {
 userAgent := getRandomUserAgent()
 addLog(fmt.Sprintf("\U0001f504 Using user agent: %s", userAgent), "SECURITY")
 }
-if _, err := client.SendMessage(ctx, targetJID, msg); err != nil {
+resp, err := client.SendMessage(ctx, targetJID, msg)
+if err != nil {
 cancel()
 addLog(fmt.Sprintf("\u274c Secure send attempt %d to %s failed: %v", attempt, phone, err), "WARN")
 if strings.Contains(strings.ToLower(err.Error()), "banned") ||
@@ -808,7 +988,7 @@ return false
 cancel()
 addLog(fmt.Sprintf("\u2709\ufe0f Message securely sent to: %s", phone))
 updateMessageStats(true)
-addToHistory("sent", phone, message, "success")
+addToHistory("sent", phone, message, "success", resp.ID)
 messageMu.Lock()
 lastMessageTime = time.Now()
 messageMu.Unlock()
@@ -880,6 +1060,11 @@ http.HandleFunc("/api/history", authMiddleware(handleHistory))
 http.HandleFunc("/logout", authMiddleware(handleLogout))
 http.HandleFunc("/send", authMiddleware(handleSecureSend))
 http.HandleFunc("/send/media", authMiddleware(handleSendMedia))
+http.HandleFunc("/api/keys", authMiddleware(handleAPIKeys))
+http.HandleFunc("/api/security/lockouts", authMiddleware(handleLockouts))
+http.HandleFunc("/api/bulk-send", authMiddleware(handleBulkSend))
+http.HandleFunc("/api/bulk-send/jobs", authMiddleware(handleBulkSendJobs))
+http.HandleFunc("/api/delivery", authMiddleware(handleDelivery))
 port := os.Getenv("PORT")
 if port == "" {
 port = "8080"
@@ -942,6 +1127,15 @@ w.Header().Set("Allow", "POST")
 http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 return
 }
+ip := r.RemoteAddr
+if idx := strings.LastIndex(ip, ":"); idx != -1 {
+ip = ip[:idx]
+}
+if isIPLocked(ip) {
+w.WriteHeader(http.StatusForbidden)
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "IP temporarily locked due to too many failed attempts"})
+return
+}
 var req struct {
 Username string `json:"username"`
 Password string `json:"password"`
@@ -960,6 +1154,7 @@ adminPass = "admin123"
 }
 if req.Username != adminUser || req.Password != adminPass {
 addLog(fmt.Sprintf("Failed JWT login attempt from: %s", r.RemoteAddr), "SECURITY")
+recordFailedLogin(ip)
 w.WriteHeader(http.StatusUnauthorized)
 json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid credentials"})
 return
@@ -1576,4 +1771,267 @@ scheduledMessages = append(scheduledMessages[:i], scheduledMessages[i+1:]...)
 }
 scheduleMu.Unlock()
 }
+}
+
+// handleAPIKeys handles GET/POST/DELETE /api/keys
+func handleAPIKeys(w http.ResponseWriter, r *http.Request) {
+w.Header().Set("Content-Type", "application/json")
+switch r.Method {
+case http.MethodGet:
+apiKeysMu.RLock()
+keys := make([]APIKey, len(apiKeys))
+copy(keys, apiKeys)
+apiKeysMu.RUnlock()
+// Redact key values, keep last 4 chars
+for i := range keys {
+if len(keys[i].Key) > 4 {
+keys[i].Key = strings.Repeat("*", len(keys[i].Key)-4) + keys[i].Key[len(keys[i].Key)-4:]
+} else {
+keys[i].Key = strings.Repeat("*", len(keys[i].Key))
+}
+}
+json.NewEncoder(w).Encode(APIResponse{Success: true, Data: keys})
+case http.MethodPost:
+var req struct {
+Name string `json:"name"`
+Role string `json:"role"`
+}
+if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "name is required"})
+return
+}
+if req.Role == "" {
+req.Role = "user"
+}
+keyBytes := make([]byte, 32)
+rand.Read(keyBytes)
+idBytes := make([]byte, 8)
+rand.Read(idBytes)
+newKey := APIKey{
+ID:        fmt.Sprintf("%x", idBytes),
+Key:       "wak_" + hex.EncodeToString(keyBytes),
+Name:      req.Name,
+Role:      req.Role,
+CreatedAt: time.Now(),
+Active:    true,
+}
+apiKeysMu.Lock()
+apiKeys = append(apiKeys, newKey)
+apiKeysMu.Unlock()
+saveAPIKeys()
+addLog(fmt.Sprintf("API key created: %s (%s)", req.Name, req.Role), "SECURITY")
+json.NewEncoder(w).Encode(APIResponse{Success: true, Data: newKey, Message: "API key created"})
+case http.MethodDelete:
+// Support deletion by id or by full key
+id := r.URL.Query().Get("id")
+key := r.URL.Query().Get("key")
+if id == "" && key == "" {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "id or key query parameter required"})
+return
+}
+apiKeysMu.Lock()
+found := false
+for i, k := range apiKeys {
+if (id != "" && k.ID == id) || (key != "" && k.Key == key) {
+apiKeys = append(apiKeys[:i], apiKeys[i+1:]...)
+found = true
+break
+}
+}
+apiKeysMu.Unlock()
+if !found {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "API key not found"})
+return
+}
+saveAPIKeys()
+addLog("API key deleted", "SECURITY")
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "API key deleted"})
+default:
+w.Header().Set("Allow", "GET, POST, DELETE")
+http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+}
+}
+
+// handleLockouts handles GET/DELETE /api/security/lockouts
+func handleLockouts(w http.ResponseWriter, r *http.Request) {
+w.Header().Set("Content-Type", "application/json")
+switch r.Method {
+case http.MethodGet:
+loginAttemptsMu.Lock()
+result := make(map[string]interface{})
+for ip, a := range loginAttempts {
+if a.Count > 0 {
+result[ip] = map[string]interface{}{
+"count":      a.Count,
+"locked":     time.Now().Before(a.LockUntil),
+"lock_until": a.LockUntil,
+"locked_at":  a.LockedAt,
+}
+}
+}
+loginAttemptsMu.Unlock()
+json.NewEncoder(w).Encode(APIResponse{Success: true, Data: result})
+case http.MethodDelete:
+ip := r.URL.Query().Get("ip")
+loginAttemptsMu.Lock()
+if ip != "" {
+delete(loginAttempts, ip)
+} else {
+loginAttempts = make(map[string]*LoginAttempt)
+}
+loginAttemptsMu.Unlock()
+addLog("Lockout cleared", "SECURITY")
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Lockout(s) cleared"})
+default:
+w.Header().Set("Allow", "GET, DELETE")
+http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+}
+}
+
+// handleBulkSend handles POST /api/bulk-send (multipart CSV file)
+func handleBulkSend(w http.ResponseWriter, r *http.Request) {
+w.Header().Set("Content-Type", "application/json")
+if r.Method != http.MethodPost {
+w.Header().Set("Allow", "POST")
+http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+return
+}
+if err := r.ParseMultipartForm(10 << 20); err != nil {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Failed to parse multipart form"})
+return
+}
+file, _, err := r.FormFile("file")
+if err != nil {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "file field is required"})
+return
+}
+defer file.Close()
+
+reader := csv.NewReader(file)
+records, err := reader.ReadAll()
+if err != nil {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Failed to parse CSV: " + err.Error()})
+return
+}
+
+type csvRow struct {
+phone   string
+message string
+}
+var rows []csvRow
+for i, rec := range records {
+if i == 0 {
+// skip header if columns are phone,message
+if len(rec) >= 2 && strings.ToLower(strings.TrimSpace(rec[0])) == "phone" {
+continue
+}
+}
+if len(rec) < 2 {
+continue
+}
+rows = append(rows, csvRow{phone: strings.TrimSpace(rec[0]), message: strings.TrimSpace(rec[1])})
+}
+
+if len(rows) == 0 {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "No valid rows found in CSV"})
+return
+}
+
+idBytes := make([]byte, 8)
+rand.Read(idBytes)
+job := &BulkSendJob{
+ID:        fmt.Sprintf("%x", idBytes),
+Status:    "running",
+Total:     len(rows),
+CreatedAt: time.Now(),
+UpdatedAt: time.Now(),
+}
+bulkJobsMu.Lock()
+bulkJobs = append(bulkJobs, job)
+bulkJobsMu.Unlock()
+
+go func() {
+for _, row := range rows {
+phone := strings.ReplaceAll(row.phone, "+", "")
+phone = strings.ReplaceAll(phone, "-", "")
+phone = strings.ReplaceAll(phone, " ", "")
+if len(phone) < 7 {
+bulkJobsMu.Lock()
+job.Failed++
+job.Progress = job.Sent + job.Failed
+job.UpdatedAt = time.Now()
+bulkJobsMu.Unlock()
+continue
+}
+ok := sendSecureMessage(phone, row.message)
+bulkJobsMu.Lock()
+if ok {
+job.Sent++
+} else {
+job.Failed++
+}
+job.Progress = job.Sent + job.Failed
+job.UpdatedAt = time.Now()
+bulkJobsMu.Unlock()
+time.Sleep(calculateSmartDelay())
+}
+bulkJobsMu.Lock()
+job.Status = "completed"
+job.UpdatedAt = time.Now()
+bulkJobsMu.Unlock()
+addLog(fmt.Sprintf("Bulk send job %s completed: %d sent, %d failed", job.ID, job.Sent, job.Failed), "INFO")
+}()
+
+json.NewEncoder(w).Encode(APIResponse{Success: true, Data: job, Message: "Bulk send job started"})
+}
+
+// handleBulkSendJobs handles GET/DELETE /api/bulk-send/jobs
+func handleBulkSendJobs(w http.ResponseWriter, r *http.Request) {
+w.Header().Set("Content-Type", "application/json")
+switch r.Method {
+case http.MethodGet:
+bulkJobsMu.Lock()
+jobs := make([]*BulkSendJob, len(bulkJobs))
+copy(jobs, bulkJobs)
+bulkJobsMu.Unlock()
+json.NewEncoder(w).Encode(APIResponse{Success: true, Data: jobs})
+case http.MethodDelete:
+id := r.URL.Query().Get("id")
+bulkJobsMu.Lock()
+if id != "" {
+for i, j := range bulkJobs {
+if j.ID == id {
+bulkJobs = append(bulkJobs[:i], bulkJobs[i+1:]...)
+break
+}
+}
+} else {
+bulkJobs = nil
+}
+bulkJobsMu.Unlock()
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Job(s) deleted"})
+default:
+w.Header().Set("Allow", "GET, DELETE")
+http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+}
+}
+
+// handleDelivery handles GET /api/delivery?phone=...
+func handleDelivery(w http.ResponseWriter, r *http.Request) {
+w.Header().Set("Content-Type", "application/json")
+if r.Method != http.MethodGet {
+w.Header().Set("Allow", "GET")
+http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+return
+}
+phone := r.URL.Query().Get("phone")
+historyMu.Lock()
+var result []MessageLogEntry
+for _, e := range messageHistory {
+if e.Direction == "sent" && (phone == "" || e.Phone == phone) {
+result = append(result, e)
+}
+}
+historyMu.Unlock()
+json.NewEncoder(w).Encode(APIResponse{Success: true, Data: result})
 }

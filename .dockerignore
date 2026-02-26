@@ -1,0 +1,5 @@
+*.db
+config.json
+.git
+data/
+wa-linker

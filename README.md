@@ -174,3 +174,116 @@ X-Webhook-Signature: sha256=<hex>
 - Safe mode (enabled by default) caps sends at 50/day and 10/hour.
 - Pairing requests are rate-limited to one attempt per phone number per 60 seconds.
 - Enable HTTPS by setting `TLS_CERT_FILE` and `TLS_KEY_FILE` (TLS 1.2+ with strong ciphers).
+- Intrusion detection locks IPs after 5 failed logins (30 min) or 10 failures (2 hours).
+
+---
+
+## Docker
+
+### Build & Run with Docker
+
+```bash
+docker build -t wa-linker .
+docker run -p 8080:8080 \
+  -e ADMIN_USER=admin \
+  -e ADMIN_PASS=yourpassword \
+  -e JWT_SECRET=yoursecret \
+  -v $(pwd)/data:/app/data \
+  wa-linker
+```
+
+### Docker Compose
+
+```bash
+# Copy and edit environment
+cp .env.example .env  # or set vars in docker-compose.yml
+
+docker-compose up -d
+```
+
+The service will be available at `http://localhost:8080`.
+
+---
+
+## Render.com Deployment
+
+1. Fork this repository
+2. Create a new **Web Service** on [Render](https://render.com)
+3. Connect your GitHub repo
+4. Render will auto-detect `render.yaml` and configure:
+   - Go build with CGO enabled
+   - PORT=10000
+   - Auto-generated JWT_SECRET
+   - 1 GB persistent disk at `/app/data`
+5. Set `ADMIN_USER` and `ADMIN_PASS` in the Render dashboard environment variables
+
+---
+
+## API Key Authentication
+
+In addition to JWT and Basic Auth, you can authenticate using API keys via the `X-API-Key` header.
+
+### Manage API Keys
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/keys` | List all API keys (values redacted) |
+| POST | `/api/keys` | Create a new key (`{"name":"My App","role":"user"}`) |
+| DELETE | `/api/keys?key=<key>` | Delete an API key |
+
+### Using an API Key
+
+```
+GET /api/info
+X-API-Key: wak_<your-key>
+```
+
+---
+
+## Intrusion Detection
+
+Failed login attempts are tracked per IP address:
+- 5 failures → locked for **30 minutes**
+- 10 failures → locked for **2 hours**
+
+### Manage Lockouts
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/security/lockouts` | List all locked/attempted IPs |
+| DELETE | `/api/security/lockouts?ip=<ip>` | Unlock a specific IP |
+| DELETE | `/api/security/lockouts` | Clear all lockouts |
+
+---
+
+## Bulk CSV Send
+
+Send messages to multiple contacts by uploading a CSV file.
+
+### CSV Format
+
+```
+phone,message
+919876543210,Hello World
+919876543211,Hi there
+```
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/bulk-send` | Upload CSV (multipart `file` field), returns job ID |
+| GET | `/api/bulk-send/jobs` | List all bulk send jobs |
+| DELETE | `/api/bulk-send/jobs?id=<id>` | Delete a job |
+
+---
+
+## Delivery Reports
+
+Message delivery status is tracked for sent messages.
+
+```
+GET /api/delivery?phone=<phone>
+```
+
+Returns sent messages with `delivery_status` (`pending`, `delivered`, `read`), `delivered_at`, and `read_at` timestamps.
