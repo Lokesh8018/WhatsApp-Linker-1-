@@ -1729,7 +1729,7 @@
             return fetch(url, Object.assign({}, options, { headers }));
         }
 
-        async function doLogin() {
+        function doLogin() {
             const email = document.getElementById('loginEmail').value.trim();
             const password = document.getElementById('loginPass').value;
             if (!email || !password) return;
@@ -1738,26 +1738,32 @@
             const btn = document.getElementById('loginBtn');
             btn.disabled = true;
             btn.textContent = 'Signing in...';
-            const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-sign-in-alt" style="margin-right:8px;"></i>Sign In';
-            if (error) {
-                errEl.textContent = error.message;
-                errEl.style.display = 'block';
-                return;
-            }
-            supabaseSession = data.session;
-            document.getElementById('loginPage').style.display = 'none';
-            document.getElementById('appShell').style.display = 'block';
-            loadInitialData();
-            startRealTimeUpdates();
+            supabase.auth.signInWithPassword({ email, password }).then(({ data, error }) => {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-sign-in-alt" style="margin-right:8px;"></i>Sign In';
+                if (error) {
+                    errEl.textContent = error.message;
+                    errEl.style.display = 'block';
+                    return;
+                }
+                supabaseSession = data.session;
+                document.getElementById('loginPage').style.display = 'none';
+                document.getElementById('appShell').style.display = 'block';
+                initializeDashboard();
+                setupEventListeners();
+                loadInitialData();
+                startRealTimeUpdates();
+            });
         }
 
-        async function logout() {
-            await supabase.auth.signOut();
-            supabaseSession = null;
-            document.getElementById('appShell').style.display = 'none';
-            document.getElementById('loginPage').style.display = 'flex';
+        function logout() {
+            supabase.auth.signOut().then(() => {
+                supabaseSession = null;
+                document.getElementById('appShell').style.display = 'none';
+                document.getElementById('loginPage').style.display = 'flex';
+            }).catch((error) => {
+                showNotification('Sign out failed: ' + (error.message || 'Unknown error'), 'error');
+            });
         }
 
         // Global variables
@@ -1778,8 +1784,8 @@
                 loadInitialData();
                 startRealTimeUpdates();
             } else {
-                initializeDashboard();
-                setupEventListeners();
+                document.getElementById('loginPage').style.display = 'flex';
+                document.getElementById('appShell').style.display = 'none';
             }
         });
         
