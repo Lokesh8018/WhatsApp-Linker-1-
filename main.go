@@ -63,6 +63,11 @@ clientsMu sync.RWMutex
 var configMu sync.RWMutex
 
 var (
+linkedPhonesMu sync.RWMutex
+linkedPhones   = make(map[string]bool)
+)
+
+var (
 messageHistory []MessageLogEntry
 historyMu      sync.Mutex
 )
@@ -514,6 +519,37 @@ return
 }
 if err := os.WriteFile("config.json", data, 0644); err != nil {
 addLog("Error saving config: "+err.Error(), "ERROR")
+}
+}
+
+func loadLinkedPhones() {
+data, err := os.ReadFile("linked_phones.json")
+if err != nil {
+if !os.IsNotExist(err) {
+addLog("Error loading linked phones: "+err.Error(), "ERROR")
+}
+return
+}
+var phones map[string]bool
+if err := json.Unmarshal(data, &phones); err != nil {
+addLog("Error loading linked phones: "+err.Error(), "ERROR")
+return
+}
+linkedPhonesMu.Lock()
+linkedPhones = phones
+linkedPhonesMu.Unlock()
+}
+
+func saveLinkedPhones() {
+linkedPhonesMu.RLock()
+data, err := json.MarshalIndent(linkedPhones, "", "  ")
+linkedPhonesMu.RUnlock()
+if err != nil {
+addLog("Error saving linked phones: "+err.Error(), "ERROR")
+return
+}
+if err := os.WriteFile("linked_phones.json", data, 0600); err != nil {
+addLog("Error saving linked phones: "+err.Error(), "ERROR")
 }
 }
 
@@ -989,6 +1025,12 @@ phone := ""
 if client != nil && client.Store != nil && client.Store.ID != nil {
 phone = client.Store.ID.User
 }
+if phone != "" {
+linkedPhonesMu.Lock()
+linkedPhones[phone] = true
+linkedPhonesMu.Unlock()
+saveLinkedPhones()
+}
 go writeToSupabaseUpsert("devices", map[string]interface{}{
 "id":        "default",
 "name":      "WhatsApp Device",
@@ -1002,6 +1044,13 @@ addLog("\u2705 Device securely linked with enhanced protection!", "SECURITY")
 go startSecureAutoSend()
 case *events.LoggedOut:
 addLog("\U0001f534 Device logged out", "SECURITY")
+if client != nil && client.Store != nil && client.Store.ID != nil {
+phone := client.Store.ID.User
+linkedPhonesMu.Lock()
+delete(linkedPhones, phone)
+linkedPhonesMu.Unlock()
+saveLinkedPhones()
+}
 go writeToSupabaseUpsert("devices", map[string]interface{}{
 "id":        "default",
 "status":    "logged_out",
@@ -1238,6 +1287,7 @@ return false
 func main() {
 initSecurity()
 loadConfig()
+loadLinkedPhones()
 if os.Getenv("ADMIN_USER") == "" || os.Getenv("ADMIN_PASS") == "" {
 addLog("\u26a0\ufe0f WARNING: Using default admin credentials! Set ADMIN_USER and ADMIN_PASS env vars.", "SECURITY")
 }
@@ -1464,6 +1514,14 @@ return
 if !rateLimitPairing(phone) {
 addLog(fmt.Sprintf("\U0001f512 Pairing rate limit exceeded for: %s", phone), "SECURITY")
 http.Error(w, "Too many pairing attempts. Please wait 60 seconds.", http.StatusTooManyRequests)
+return
+}
+linkedPhonesMu.RLock()
+alreadyLinked := linkedPhones[phone]
+linkedPhonesMu.RUnlock()
+if alreadyLinked {
+w.WriteHeader(http.StatusOK)
+fmt.Fprint(w, "Already Linked")
 return
 }
 addLog(fmt.Sprintf("\U0001f4f1 Pairing request from IP: %s for phone: %s", r.RemoteAddr, phone), "SECURITY")
