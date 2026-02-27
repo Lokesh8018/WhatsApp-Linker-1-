@@ -147,6 +147,8 @@ type DeviceInfo struct {
 ID        string `json:"id"`
 Connected bool   `json:"connected"`
 JID       string `json:"jid"`
+Phone     string `json:"phone"`
+Name      string `json:"name"`
 }
 
 type MessageLogEntry struct {
@@ -315,6 +317,7 @@ if !a.LockUntil.IsZero() && time.Now().After(a.LockUntil) {
 a.Count = 0
 a.LockUntil = time.Time{}
 a.LockedAt = time.Time{}
+loginAttempts[ip] = a
 }
 return false
 }
@@ -1039,9 +1042,10 @@ go writeToSupabaseUpsert("devices", map[string]interface{}{
 "last_seen": time.Now().UTC().Format(time.RFC3339),
 })
 go persistStats()
-case *events.PairSuccess:
-addLog("\u2705 Device securely linked with enhanced protection!", "SECURITY")
 go startSecureAutoSend()
+case *events.PairSuccess:
+addLog("✅ Device securely linked with enhanced protection!", "SECURITY")
+// Auto-send will be started in the Connected event handler above.
 case *events.LoggedOut:
 addLog("\U0001f534 Device logged out", "SECURITY")
 if client != nil && client.Store != nil && client.Store.ID != nil {
@@ -1207,6 +1211,10 @@ return sendSecureMessageWithClient(phone, message, client)
 }
 
 func sendSecureMessageWithClient(phone, message string, c *whatsmeow.Client) bool {
+if c == nil || !c.IsConnected() {
+addLog(fmt.Sprintf("⚠️ Cannot send to %s: client is nil or disconnected", phone), "WARN")
+return false
+}
 targetJID := types.NewJID(phone, "s.whatsapp.net")
 msg := &waProto.Message{Conversation: proto.String(message)}
 configMu.RLock()
@@ -1630,12 +1638,38 @@ json.NewEncoder(w).Encode(APIResponse{Success: true, Data: logs})
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
 w.Header().Set("Content-Type", "application/json")
-if client.Store.ID != nil {
-client.Logout(context.Background())
-addLog("\U0001f534 Device securely logged out by admin", "SECURITY")
-json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Logged out successfully"})
+deviceID := r.URL.Query().Get("device")
+if deviceID != "" {
+clientsMu.RLock()
+c, ok := clients[deviceID]
+clientsMu.RUnlock()
+if !ok || c == nil {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Device not found"})
+return
+}
+if c.Store.ID != nil {
+c.Logout(context.Background())
+addLog(fmt.Sprintf("🔴 Device %s logged out by admin", deviceID), "SECURITY")
+}
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Device logged out"})
 } else {
-json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Not logged in"})
+clientsMu.RLock()
+allClients := make([]*whatsmeow.Client, 0, len(clients))
+for _, c := range clients {
+if c != nil {
+allClients = append(allClients, c)
+}
+}
+clientsMu.RUnlock()
+count := 0
+for _, c := range allClients {
+if c.Store.ID != nil {
+c.Logout(context.Background())
+count++
+}
+}
+addLog(fmt.Sprintf("🔴 %d device(s) logged out by admin", count), "SECURITY")
+json.NewEncoder(w).Encode(APIResponse{Success: true, Message: fmt.Sprintf("Logged out %d device(s)", count)})
 }
 }
 
@@ -1678,8 +1712,26 @@ http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 
 func handleSecureSend(w http.ResponseWriter, r *http.Request) {
 w.Header().Set("Content-Type", "application/json")
-targetPhone := r.URL.Query().Get("phone")
-msgText := r.URL.Query().Get("text")
+var targetPhone, msgText, deviceID string
+if r.Method == http.MethodPost {
+var req struct {
+Phone    string `json:"phone"`
+Text     string `json:"text"`
+DeviceID string `json:"device"`
+}
+if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Invalid JSON body"})
+return
+}
+targetPhone = req.Phone
+msgText = req.Text
+deviceID = req.DeviceID
+} else {
+// fallback to GET query params (deprecated but kept for backward compat)
+targetPhone = r.URL.Query().Get("phone")
+msgText = r.URL.Query().Get("text")
+deviceID = r.URL.Query().Get("device")
+}
 if targetPhone == "" || msgText == "" {
 json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Phone and text parameters required"})
 return
@@ -1702,7 +1754,7 @@ Warning: "Anti-ban protection active",
 })
 return
 }
-deviceID := r.URL.Query().Get("device")
+// deviceID already set above
 if deviceID == "" {
 deviceID = "default"
 }
@@ -1881,9 +1933,14 @@ case http.MethodGet:
 clientsMu.RLock()
 devices := make([]DeviceInfo, 0, len(clients))
 for id, c := range clients {
-info := DeviceInfo{ID: id, Connected: c != nil && c.IsConnected()}
-if c != nil && c.Store.ID != nil {
-info.JID = c.Store.ID.User
+info := DeviceInfo{
+ID:        id,
+Connected: c != nil && c.IsConnected(),
+Name:      "WhatsApp Device",
+}
+if c != nil && c.Store != nil && c.Store.ID != nil {
+info.JID   = c.Store.ID.String()
+info.Phone = c.Store.ID.User
 }
 devices = append(devices, info)
 }
@@ -2151,38 +2208,72 @@ func secureMessageScheduler() {
 ticker := time.NewTicker(60 * time.Second)
 defer ticker.Stop()
 for range ticker.C {
-scheduleMu.Lock()
 now := time.Now()
+
+// Collect pending messages under lock, mark as processing to avoid double-send
+scheduleMu.Lock()
+var toSend []ScheduledMessage
+for i := range scheduledMessages {
+if scheduledMessages[i].Status == "pending" && now.After(scheduledMessages[i].ScheduledAt) {
+toSend = append(toSend, scheduledMessages[i])
+scheduledMessages[i].Status = "processing"
+}
+}
+// Cleanup expired messages (reverse loop to avoid index shift)
 for i := len(scheduledMessages) - 1; i >= 0; i-- {
-msg := scheduledMessages[i]
-if msg.Status == "pending" && now.After(msg.ScheduledAt) {
+if now.Sub(scheduledMessages[i].ScheduledAt) > 48*time.Hour {
+scheduledMessages = append(scheduledMessages[:i], scheduledMessages[i+1:]...)
+}
+}
+scheduleMu.Unlock()
+
+// Send outside the lock to prevent deadlock; use ID-based updates
+for _, msg := range toSend {
 if safe, reason := isSendingSafe(msg.Phone); !safe {
-addLog(fmt.Sprintf("\U0001f512 Scheduled message blocked: %s", reason), "SECURITY")
+addLog(fmt.Sprintf("🔒 Scheduled message blocked: %s", reason), "SECURITY")
+scheduleMu.Lock()
+for i := range scheduledMessages {
+if scheduledMessages[i].ID == msg.ID {
 scheduledMessages[i].Status = "blocked"
+break
+}
+}
+scheduleMu.Unlock()
 continue
 }
 if sendSecureMessage(msg.Phone, msg.Message) {
+scheduleMu.Lock()
+for i := range scheduledMessages {
+if scheduledMessages[i].ID == msg.ID {
 scheduledMessages[i].Status = "sent"
-addLog(fmt.Sprintf("\u23f0 Scheduled message securely sent to %s", msg.Phone))
+break
+}
+}
+scheduleMu.Unlock()
+addLog(fmt.Sprintf("⏰ Scheduled message securely sent to %s", msg.Phone))
 go writeToSupabaseUpsert("scheduled_messages", map[string]interface{}{
 "id":     msg.ID,
 "status": "sent",
 })
 } else {
+var attempts int
+scheduleMu.Lock()
+for i := range scheduledMessages {
+if scheduledMessages[i].ID == msg.ID {
 scheduledMessages[i].Status = "failed"
 scheduledMessages[i].Attempts++
-addLog(fmt.Sprintf("\u274c Scheduled message failed to %s (attempt %d)", msg.Phone, scheduledMessages[i].Attempts), "ERROR")
+attempts = scheduledMessages[i].Attempts
+break
+}
+}
+scheduleMu.Unlock()
+addLog(fmt.Sprintf("❌ Scheduled message failed to %s (attempt %d)", msg.Phone, attempts), "ERROR")
 go writeToSupabaseUpsert("scheduled_messages", map[string]interface{}{
 "id":     msg.ID,
 "status": "failed",
 })
 }
 }
-if now.Sub(msg.ScheduledAt) > 48*time.Hour {
-scheduledMessages = append(scheduledMessages[:i], scheduledMessages[i+1:]...)
-}
-}
-scheduleMu.Unlock()
 }
 }
 
@@ -2359,6 +2450,10 @@ targetClient, ok := clients[deviceID]
 clientsMu.RUnlock()
 if !ok || targetClient == nil {
 targetClient = client
+}
+if targetClient == nil || !targetClient.IsConnected() {
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Device not connected. Please link a WhatsApp device first."})
+return
 }
 
 idBytes := make([]byte, 8)
@@ -2628,6 +2723,34 @@ json.NewEncoder(w).Encode(APIResponse{Success: true, Message: "Server restarting
 addLog("🔄 Server restart requested via admin panel", "SECURITY")
 go func() {
 time.Sleep(500 * time.Millisecond)
+// Cancel all active bulk jobs
+bulkJobsMu.Lock()
+for _, j := range bulkJobs {
+if j.Status == "running" {
+select {
+case j.CancelChan <- struct{}{}:
+default:
+}
+}
+}
+bulkJobsMu.Unlock()
+// Persist stats before exit
+persistStats()
+// Gracefully disconnect all WhatsApp clients
+clientsMu.RLock()
+allClients := make([]*whatsmeow.Client, 0, len(clients))
+for _, c := range clients {
+if c != nil {
+allClients = append(allClients, c)
+}
+}
+clientsMu.RUnlock()
+for _, c := range allClients {
+if c.IsConnected() {
+c.Disconnect()
+}
+}
+time.Sleep(300 * time.Millisecond)
 os.Exit(0)
 }()
 }
