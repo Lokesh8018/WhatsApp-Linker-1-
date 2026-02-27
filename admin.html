@@ -810,6 +810,47 @@
             70% { transform: scale(0.9); }
             100% { transform: scale(1); opacity: 1; }
         }
+
+        /* API Docs styles */
+        .api-tab-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+        .api-tab-btn { padding: 8px 16px; border-radius: 20px; border: 1px solid var(--border-color); background: var(--card-bg); cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text-primary); transition: all 0.2s; }
+        .api-tab-btn.active { background: var(--info-color); color: white; border-color: var(--info-color); }
+        .api-endpoint-card { background: var(--card-bg); border-radius: 12px; margin-bottom: 10px; border: 1px solid var(--border-color); overflow: hidden; transition: box-shadow 0.2s; }
+        .api-endpoint-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        .api-endpoint-card.method-get  { border-left: 4px solid #10b981; }
+        .api-endpoint-card.method-post { border-left: 4px solid #3b82f6; }
+        .api-endpoint-card.method-delete { border-left: 4px solid #ef4444; }
+        .api-endpoint-card.method-put  { border-left: 4px solid #f59e0b; }
+        .api-endpoint-card.method-patch { border-left: 4px solid #8b5cf6; }
+        .api-method-badge { padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; min-width: 60px; text-align: center; display: inline-block; }
+        .api-method-badge.method-get    { background: #10b981; color: white; }
+        .api-method-badge.method-post   { background: #3b82f6; color: white; }
+        .api-method-badge.method-delete { background: #ef4444; color: white; }
+        .api-method-badge.method-put    { background: #f59e0b; color: white; }
+        .api-method-badge.method-patch  { background: #8b5cf6; color: white; }
+        .api-card-header { display: flex; align-items: center; gap: 12px; padding: 14px 18px; cursor: pointer; user-select: none; }
+        .api-path { font-size: 14px; font-weight: 600; color: var(--info-color); font-family: monospace; }
+        .api-card-desc { flex: 1; font-size: 13px; color: var(--text-secondary); }
+        .api-card-body { padding: 0 18px 18px; border-top: 1px solid var(--border-color); }
+        .api-card-actions { display: flex; align-items: center; gap: 6px; }
+        .api-chevron { transition: transform 0.2s; color: var(--text-secondary); }
+        .api-search-box { border-radius: 20px; padding: 8px 16px; font-size: 13px; }
+        .api-try-panel { margin-top: 14px; padding: 16px; background: rgba(59,130,246,0.05); border-radius: 10px; border: 1px dashed var(--info-color); }
+        .api-curl-btn { white-space: nowrap; }
+        .try-response { background: #0f172a; color: #86efac; padding: 12px; border-radius: 8px; font-size: 12px; font-family: monospace; max-height: 250px; overflow-y: auto; white-space: pre-wrap; margin-top: 10px; }
+        .api-params-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+        .api-params-table th { text-align: left; padding: 6px 10px; border-bottom: 2px solid var(--border-color); color: var(--text-secondary); font-weight: 600; }
+        .api-params-table td { padding: 6px 10px; border-bottom: 1px solid var(--border-color); }
+        .api-section-label { font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin: 14px 0 6px; }
+        /* Dark mode overrides */
+        body.dark-mode .api-endpoint-card { background: rgba(30,30,40,0.9); border-color: rgba(255,255,255,0.1); }
+        body.dark-mode .api-path { color: #93c5fd; }
+        body.dark-mode .api-card-desc { color: #9ca3af; }
+        body.dark-mode .api-search-box { background: rgba(255,255,255,0.05); color: #f3f4f6; border-color: rgba(255,255,255,0.15); }
+        body.dark-mode .api-tab-btn { background: rgba(255,255,255,0.05); color: #d1d5db; }
+        body.dark-mode .api-tab-btn.active { background: var(--info-color); color: white; }
+        body.dark-mode pre.try-response { background: #0f172a; color: #86efac; }
+        body.dark-mode .api-params-table td, body.dark-mode .api-params-table th { border-color: rgba(255,255,255,0.1); }
     </style>
 </head>
 <body>
@@ -868,6 +909,10 @@
             <li><a href="#" class="menu-link" data-page="apikeys">
                 <span class="icon"><i class="fas fa-key"></i></span>
                 <span class="menu-text">API Keys</span>
+            </a></li>
+            <li><a href="#" class="menu-link" data-page="apidocs">
+                <span class="icon"><i class="fas fa-book"></i></span>
+                <span class="menu-text">API Docs</span>
             </a></li>
             <li><a href="#" class="menu-link" onclick="logout(); return false;" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.15);padding-top:12px;">
                 <span class="icon"><i class="fas fa-sign-out-alt"></i></span>
@@ -1681,6 +1726,914 @@
                     </div>
                 </div>
             </div>
+
+            <!-- API Docs Page -->
+            <div id="apidocs" class="page-section">
+                <div class="page-header">
+                    <div class="page-title">
+                        <i class="fas fa-book"></i>
+                        <h1>API Documentation</h1>
+                    </div>
+                    <div class="quick-actions">
+                        <input type="text" id="apiDocsSearch" class="api-search-box form-control" placeholder="🔍 Search endpoints..." oninput="filterApiDocs(this.value)" style="width:260px;">
+                        <button class="btn btn-secondary" onclick="toggleAllApiCards(true)"><i class="fas fa-expand-alt"></i> Expand All</button>
+                        <button class="btn btn-secondary" onclick="toggleAllApiCards(false)"><i class="fas fa-compress-alt"></i> Collapse All</button>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-bottom:20px; padding:16px 20px;">
+                    <strong style="font-size:14px;"><i class="fas fa-shield-alt" style="margin-right:6px; color:var(--info-color);"></i>Authentication</strong>
+                    <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:10px;">
+                        <code style="background:rgba(59,130,246,0.08); padding:6px 12px; border-radius:8px; font-size:12px;">Basic Auth: Authorization: Basic &lt;base64(user:pass)&gt;</code>
+                        <code style="background:rgba(59,130,246,0.08); padding:6px 12px; border-radius:8px; font-size:12px;">JWT Bearer: Authorization: Bearer &lt;token&gt; &nbsp;(obtain from POST /auth/login)</code>
+                        <code style="background:rgba(59,130,246,0.08); padding:6px 12px; border-radius:8px; font-size:12px;">API Key: X-API-Key: wak_&lt;your-key&gt;</code>
+                    </div>
+                </div>
+
+                <div class="api-tab-bar">
+                    <button class="api-tab-btn active" data-tab="all">All</button>
+                    <button class="api-tab-btn" data-tab="public">🌐 Public</button>
+                    <button class="api-tab-btn" data-tab="messaging">📨 Messaging</button>
+                    <button class="api-tab-btn" data-tab="devices">📱 Devices</button>
+                    <button class="api-tab-btn" data-tab="bulk">📦 Bulk</button>
+                    <button class="api-tab-btn" data-tab="schedule">📅 Schedule</button>
+                    <button class="api-tab-btn" data-tab="apikeys">🔑 API Keys</button>
+                    <button class="api-tab-btn" data-tab="security">🔒 Security</button>
+                    <button class="api-tab-btn" data-tab="system">⚙️ System</button>
+                </div>
+
+                <div id="apiDocsCards">
+
+                    <!-- PUBLIC -->
+                    <div class="api-endpoint-card method-get" data-tab="public" data-search="GET / Serve main web UI">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/</code>
+                            <span class="api-card-desc">Serve main web UI</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">HTML — main web UI page</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="public" data-search="POST /auth/login Obtain JWT token">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/auth/login</code>
+                            <span class="api-card-desc">Obtain JWT token</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/auth/login',null,{username:'admin',password:'secret'})"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Request Body (JSON)</div>
+                            <pre class="try-response" style="margin-top:0;">{"username":"admin","password":"secret"}</pre>
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"token":"eyJ..."}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/auth/login">
+                                <div class="api-section-label">Request Body</div>
+                                <textarea class="form-control try-body" rows="3" style="font-family:monospace;font-size:12px;">{"username":"admin","password":"secret"}</textarea>
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-get" data-tab="public" data-search="GET /health Server health check uptime version WhatsApp status">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/health</code>
+                            <span class="api-card-desc">Server health check — uptime, version, WhatsApp status</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/health',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"status":"ok","uptime":"2h30m","version":"1.0.0","whatsapp":"connected"}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/health">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-get" data-tab="public" data-search="GET /pair WhatsApp pairing code">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/pair</code>
+                            <span class="api-card-desc">WhatsApp pairing code</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/pair','phone=1234567890&amp;device=device1',null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Query Parameters</div>
+                            <table class="api-params-table">
+                                <thead><tr><th>Name</th><th>Description</th><th>Example</th></tr></thead>
+                                <tbody>
+                                    <tr><td><code>phone</code></td><td>Phone number</td><td>1234567890</td></tr>
+                                    <tr><td><code>device</code></td><td>Device ID</td><td>device1</td></tr>
+                                </tbody>
+                            </table>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/pair">
+                                <div class="api-section-label">Query Params</div>
+                                <input class="form-control try-params" placeholder="phone=1234567890&device=device1" value="phone=1234567890&device=device1" style="font-family:monospace;font-size:12px;">
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-get" data-tab="public" data-search="GET /is-linked Returns true/false device link status">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/is-linked</code>
+                            <span class="api-card-desc">Returns true/false — device link status</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/is-linked',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"linked":true}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/is-linked">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- MESSAGING -->
+                    <div class="api-endpoint-card method-post" data-tab="messaging" data-search="POST /send Send text message">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/send</code>
+                            <span class="api-card-desc">Send a text message</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/send','phone=1234567890&amp;text=Hello&amp;device=device1',null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Query Parameters</div>
+                            <table class="api-params-table">
+                                <thead><tr><th>Name</th><th>Description</th><th>Example</th></tr></thead>
+                                <tbody>
+                                    <tr><td><code>phone</code></td><td>Recipient phone number</td><td>1234567890</td></tr>
+                                    <tr><td><code>text</code></td><td>Message text</td><td>Hello!</td></tr>
+                                    <tr><td><code>device</code></td><td>Device ID</td><td>device1</td></tr>
+                                </tbody>
+                            </table>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/send">
+                                <div class="api-section-label">Query Params</div>
+                                <input class="form-control try-params" value="phone=1234567890&text=Hello&device=device1" style="font-family:monospace;font-size:12px;">
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="messaging" data-search="POST /send/media Send image document media">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/send/media</code>
+                            <span class="api-card-desc">Send image/document</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/send/media',null,{phone:'1234567890',url:'https://example.com/img.jpg',caption:'Hello',type:'image'})"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Request Body (JSON)</div>
+                            <pre class="try-response" style="margin-top:0;">{"phone":"1234567890","url":"https://example.com/img.jpg","caption":"Hello","type":"image"}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/send/media">
+                                <div class="api-section-label">Request Body</div>
+                                <textarea class="form-control try-body" rows="4" style="font-family:monospace;font-size:12px;">{"phone":"1234567890","url":"https://example.com/img.jpg","caption":"Hello","type":"image"}</textarea>
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-get" data-tab="messaging" data-search="GET /api/history Paginated message history">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/api/history</code>
+                            <span class="api-card-desc">Paginated message history</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/api/history','page=1&amp;limit=50',null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Query Parameters</div>
+                            <table class="api-params-table">
+                                <thead><tr><th>Name</th><th>Description</th><th>Example</th></tr></thead>
+                                <tbody>
+                                    <tr><td><code>page</code></td><td>Page number</td><td>1</td></tr>
+                                    <tr><td><code>limit</code></td><td>Results per page</td><td>50</td></tr>
+                                </tbody>
+                            </table>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/api/history">
+                                <div class="api-section-label">Query Params</div>
+                                <input class="form-control try-params" value="page=1&limit=50" style="font-family:monospace;font-size:12px;">
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-get" data-tab="messaging" data-search="GET /api/delivery Delivery status reports">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/api/delivery</code>
+                            <span class="api-card-desc">Delivery status reports</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/api/delivery',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"reports":[...]}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/api/delivery">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="messaging" data-search="POST /logout Log out linked WhatsApp device">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/logout</code>
+                            <span class="api-card-desc">Log out the linked WhatsApp device</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/logout',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"success":true}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/logout">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- DEVICES -->
+                    <div class="api-endpoint-card method-get" data-tab="devices" data-search="GET /api/devices List all devices connection status">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/api/devices</code>
+                            <span class="api-card-desc">List all devices with connection status</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/api/devices',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"success":true,"data":[{"id":"device1","status":"connected"}]}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/api/devices">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="devices" data-search="POST /api/devices Add new device">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/api/devices</code>
+                            <span class="api-card-desc">Add new device</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/api/devices',null,{device_id:'device2'})"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Request Body (JSON)</div>
+                            <pre class="try-response" style="margin-top:0;">{"device_id":"device2"}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/api/devices">
+                                <div class="api-section-label">Request Body</div>
+                                <textarea class="form-control try-body" rows="2" style="font-family:monospace;font-size:12px;">{"device_id":"device2"}</textarea>
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-delete" data-tab="devices" data-search="DELETE /api/devices Disconnect remove device">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-delete">DELETE</span>
+                            <code class="api-path">/api/devices</code>
+                            <span class="api-card-desc">Disconnect and remove a device</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'DELETE','/api/devices','id=device1',null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Query Parameters</div>
+                            <table class="api-params-table">
+                                <thead><tr><th>Name</th><th>Description</th><th>Example</th></tr></thead>
+                                <tbody><tr><td><code>id</code></td><td>Device ID to remove</td><td>device1</td></tr></tbody>
+                            </table>
+                            <div class="api-try-panel" style="display:none;" data-method="DELETE" data-path="/api/devices">
+                                <div class="api-section-label">Query Params</div>
+                                <input class="form-control try-params" value="id=device1" style="font-family:monospace;font-size:12px;">
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="devices" data-search="POST /api/devices/disconnect-all Disconnect all devices">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/api/devices/disconnect-all</code>
+                            <span class="api-card-desc">Disconnect all devices</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/api/devices/disconnect-all',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"success":true}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/api/devices/disconnect-all">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- BULK -->
+                    <div class="api-endpoint-card method-post" data-tab="bulk" data-search="POST /api/bulk-send Upload CSV start bulk send job">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/api/bulk-send</code>
+                            <span class="api-card-desc">Upload CSV and start bulk send job</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/api/bulk-send',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Request</div>
+                            <pre class="try-response" style="margin-top:0;">multipart/form-data — CSV file with columns: phone, message</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/api/bulk-send">
+                                <p style="font-size:12px;color:var(--text-secondary);">Upload via the Bulk Messaging page.</p>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-get" data-tab="bulk" data-search="GET /api/bulk-send/jobs List all bulk send jobs">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/api/bulk-send/jobs</code>
+                            <span class="api-card-desc">List all bulk send jobs</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/api/bulk-send/jobs',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"jobs":[{"id":"job1","status":"running","progress":50}]}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/api/bulk-send/jobs">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="bulk" data-search="POST /api/bulk-send/jobs/cancel Cancel running bulk job">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/api/bulk-send/jobs/cancel</code>
+                            <span class="api-card-desc">Cancel a running bulk job</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/api/bulk-send/jobs/cancel',null,{job_id:'job1'})"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Request Body (JSON)</div>
+                            <pre class="try-response" style="margin-top:0;">{"job_id":"job1"}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/api/bulk-send/jobs/cancel">
+                                <div class="api-section-label">Request Body</div>
+                                <textarea class="form-control try-body" rows="2" style="font-family:monospace;font-size:12px;">{"job_id":"job1"}</textarea>
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="bulk" data-search="POST /api/bulk-send/jobs/pause Pause running bulk job">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/api/bulk-send/jobs/pause</code>
+                            <span class="api-card-desc">Pause a running bulk job</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/api/bulk-send/jobs/pause',null,{job_id:'job1'})"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Request Body (JSON)</div>
+                            <pre class="try-response" style="margin-top:0;">{"job_id":"job1"}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/api/bulk-send/jobs/pause">
+                                <div class="api-section-label">Request Body</div>
+                                <textarea class="form-control try-body" rows="2" style="font-family:monospace;font-size:12px;">{"job_id":"job1"}</textarea>
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="bulk" data-search="POST /api/bulk-send/jobs/resume Resume paused bulk job">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/api/bulk-send/jobs/resume</code>
+                            <span class="api-card-desc">Resume a paused bulk job</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/api/bulk-send/jobs/resume',null,{job_id:'job1'})"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Request Body (JSON)</div>
+                            <pre class="try-response" style="margin-top:0;">{"job_id":"job1"}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/api/bulk-send/jobs/resume">
+                                <div class="api-section-label">Request Body</div>
+                                <textarea class="form-control try-body" rows="2" style="font-family:monospace;font-size:12px;">{"job_id":"job1"}</textarea>
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SCHEDULE -->
+                    <div class="api-endpoint-card method-get" data-tab="schedule" data-search="GET /api/schedule List all scheduled messages">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/api/schedule</code>
+                            <span class="api-card-desc">List all scheduled messages</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/api/schedule',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"schedules":[...]}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/api/schedule">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="schedule" data-search="POST /api/schedule Add scheduled message">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/api/schedule</code>
+                            <span class="api-card-desc">Add scheduled message</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/api/schedule',null,{phone:'1234567890',message:'Hello',scheduled_at:'2026-01-01T10:00:00Z'})"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Request Body (JSON)</div>
+                            <pre class="try-response" style="margin-top:0;">{"phone":"1234567890","message":"Hello","scheduled_at":"2026-01-01T10:00:00Z"}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/api/schedule">
+                                <div class="api-section-label">Request Body</div>
+                                <textarea class="form-control try-body" rows="3" style="font-family:monospace;font-size:12px;">{"phone":"1234567890","message":"Hello","scheduled_at":"2026-01-01T10:00:00Z"}</textarea>
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- API KEYS -->
+                    <div class="api-endpoint-card method-get" data-tab="apikeys" data-search="GET /api/keys List all API keys">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/api/keys</code>
+                            <span class="api-card-desc">List all API keys (values redacted)</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/api/keys',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"keys":[{"id":"k1","name":"My App","role":"user"}]}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/api/keys">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="apikeys" data-search="POST /api/keys Create new API key">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/api/keys</code>
+                            <span class="api-card-desc">Create new API key</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/api/keys',null,{name:'My App',role:'user'})"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Request Body (JSON)</div>
+                            <pre class="try-response" style="margin-top:0;">{"name":"My App","role":"user"}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/api/keys">
+                                <div class="api-section-label">Request Body</div>
+                                <textarea class="form-control try-body" rows="2" style="font-family:monospace;font-size:12px;">{"name":"My App","role":"user"}</textarea>
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-delete" data-tab="apikeys" data-search="DELETE /api/keys Delete API key">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-delete">DELETE</span>
+                            <code class="api-path">/api/keys</code>
+                            <span class="api-card-desc">Delete an API key</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'DELETE','/api/keys','id=k1',null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Query Parameters</div>
+                            <table class="api-params-table">
+                                <thead><tr><th>Name</th><th>Description</th><th>Example</th></tr></thead>
+                                <tbody><tr><td><code>id</code></td><td>Key ID to delete</td><td>k1</td></tr></tbody>
+                            </table>
+                            <div class="api-try-panel" style="display:none;" data-method="DELETE" data-path="/api/keys">
+                                <div class="api-section-label">Query Params</div>
+                                <input class="form-control try-params" value="id=k1" style="font-family:monospace;font-size:12px;">
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SECURITY -->
+                    <div class="api-endpoint-card method-get" data-tab="security" data-search="GET /api/security Security status overview">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/api/security</code>
+                            <span class="api-card-desc">Security status overview</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/api/security',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"status":"ok","lockouts":0}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/api/security">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-get" data-tab="security" data-search="GET /api/security/lockouts List locked-out IPs phones">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/api/security/lockouts</code>
+                            <span class="api-card-desc">List locked-out IPs/phones</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/api/security/lockouts',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"lockouts":[]}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/api/security/lockouts">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-delete" data-tab="security" data-search="DELETE /api/security/lockouts Clear lockout">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-delete">DELETE</span>
+                            <code class="api-path">/api/security/lockouts</code>
+                            <span class="api-card-desc">Clear a lockout</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'DELETE','/api/security/lockouts','key=1.2.3.4',null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Query Parameters</div>
+                            <table class="api-params-table">
+                                <thead><tr><th>Name</th><th>Description</th><th>Example</th></tr></thead>
+                                <tbody><tr><td><code>key</code></td><td>IP or phone to clear</td><td>1.2.3.4</td></tr></tbody>
+                            </table>
+                            <div class="api-try-panel" style="display:none;" data-method="DELETE" data-path="/api/security/lockouts">
+                                <div class="api-section-label">Query Params</div>
+                                <input class="form-control try-params" value="key=1.2.3.4" style="font-family:monospace;font-size:12px;">
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SYSTEM -->
+                    <div class="api-endpoint-card method-get" data-tab="system" data-search="GET /api/info WhatsApp connection info">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/api/info</code>
+                            <span class="api-card-desc">WhatsApp connection info</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/api/info',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"phone":"...","name":"...","status":"connected"}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/api/info">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-get" data-tab="system" data-search="GET /api/config Get current configuration">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/api/config</code>
+                            <span class="api-card-desc">Get current configuration</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/api/config',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"webhook_url":"...","rate_limit":10,...}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/api/config">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="system" data-search="POST /api/config Update configuration">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/api/config</code>
+                            <span class="api-card-desc">Update configuration</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/api/config',null,{webhook_url:'https://example.com/hook'})"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Request Body (JSON)</div>
+                            <pre class="try-response" style="margin-top:0;">{"webhook_url":"https://example.com/hook"}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/api/config">
+                                <div class="api-section-label">Request Body</div>
+                                <textarea class="form-control try-body" rows="3" style="font-family:monospace;font-size:12px;">{"webhook_url":"https://example.com/hook"}</textarea>
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-get" data-tab="system" data-search="GET /api/logs Retrieve recent system logs">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/api/logs</code>
+                            <span class="api-card-desc">Retrieve recent system logs</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/api/logs',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"logs":["2026-01-01 INFO ..."]}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/api/logs">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-get" data-tab="system" data-search="GET /api/stats Message statistics ban warnings">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/api/stats</code>
+                            <span class="api-card-desc">Message statistics and ban warnings</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/api/stats',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"total_sent":100,"failed":2,"ban_risk":"low"}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/api/stats">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-delete" data-tab="system" data-search="DELETE /api/stats Reset all statistics">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-delete">DELETE</span>
+                            <code class="api-path">/api/stats</code>
+                            <span class="api-card-desc">Reset all statistics</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'DELETE','/api/stats',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"success":true}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="DELETE" data-path="/api/stats">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="system" data-search="POST /api/webhook/test Fire test webhook dummy payload">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/api/webhook/test</code>
+                            <span class="api-card-desc">Fire a test webhook with dummy payload</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/api/webhook/test',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"success":true,"status":200}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/api/webhook/test">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="system" data-search="POST /api/restart Restart server">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/api/restart</code>
+                            <span class="api-card-desc">Restart the server</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/api/restart',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"success":true}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/api/restart">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="system" data-search="POST /api/restore Restore from backup">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/api/restore</code>
+                            <span class="api-card-desc">Restore from backup</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/api/restore',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"success":true}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/api/restore">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-get" data-tab="system" data-search="GET /api/automation Get automation rules">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-get">GET</span>
+                            <code class="api-path">/api/automation</code>
+                            <span class="api-card-desc">Get automation rules</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'GET','/api/automation',null,null)"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Response</div>
+                            <pre class="try-response" style="margin-top:0;">{"rules":[...]}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="GET" data-path="/api/automation">
+                                <button class="btn btn-sm btn-whatsapp" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoint-card method-post" data-tab="system" data-search="POST /api/automation Create update automation rule">
+                        <div class="api-card-header" onclick="toggleApiCard(this)">
+                            <span class="api-method-badge method-post">POST</span>
+                            <code class="api-path">/api/automation</code>
+                            <span class="api-card-desc">Create/update automation rule</span>
+                            <div class="api-card-actions">
+                                <button class="api-curl-btn btn btn-sm" onclick="copyApiCurl(event,'POST','/api/automation',null,{trigger:'keyword',response:'Hello!'})"><i class="fas fa-copy"></i> cURL</button>
+                                <button class="btn btn-sm btn-whatsapp" onclick="openTryIt(event,this)"><i class="fas fa-play"></i> Try It</button>
+                                <i class="fas fa-chevron-down api-chevron"></i>
+                            </div>
+                        </div>
+                        <div class="api-card-body" style="display:none;">
+                            <div class="api-section-label">Request Body (JSON)</div>
+                            <pre class="try-response" style="margin-top:0;">{"trigger":"keyword","response":"Hello!"}</pre>
+                            <div class="api-try-panel" style="display:none;" data-method="POST" data-path="/api/automation">
+                                <div class="api-section-label">Request Body</div>
+                                <textarea class="form-control try-body" rows="3" style="font-family:monospace;font-size:12px;">{"trigger":"keyword","response":"Hello!"}</textarea>
+                                <button class="btn btn-sm btn-whatsapp" style="margin-top:8px;" onclick="executeTryIt(this.closest('.api-try-panel'))"><i class="fas fa-play"></i> Execute</button>
+                                <pre class="try-response">Response will appear here...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                </div><!-- end #apiDocsCards -->
+            </div><!-- end #apidocs -->
         </div>
     </main>
 
@@ -1751,7 +2704,8 @@
                 analytics: 'Analytics',
                 logs: 'System Logs',
                 settings: 'Settings',
-                apikeys: 'API Keys'
+                apikeys: 'API Keys',
+                apidocs: 'API Docs'
             };
             document.getElementById('currentPageBreadcrumb').textContent = pageNames[page];
             
@@ -1804,6 +2758,8 @@
                     break;
                 case 'apikeys':
                     await loadAPIKeys();
+                    break;
+                case 'apidocs':
                     break;
             }
         }
@@ -3073,6 +4029,105 @@ Active: ${device.isActive ? 'Yes' : 'No'}
                 showNotification('Error deleting job', 'error');
             }
         }
+
+        // API Docs tab filtering
+        function switchApiTab(tab) {
+            document.querySelectorAll('.api-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+            document.querySelectorAll('.api-endpoint-card').forEach(card => {
+                const matchesTab = tab === 'all' || card.dataset.tab === tab;
+                card.style.display = matchesTab ? 'block' : 'none';
+            });
+        }
+
+        // Real-time search filter
+        function filterApiDocs(query) {
+            const q = query.toLowerCase();
+            const activeTab = document.querySelector('.api-tab-btn.active') ? document.querySelector('.api-tab-btn.active').dataset.tab : 'all';
+            document.querySelectorAll('.api-endpoint-card').forEach(card => {
+                const matchesSearch = !q || card.dataset.search.toLowerCase().includes(q);
+                const matchesTab = activeTab === 'all' || card.dataset.tab === activeTab;
+                card.style.display = (matchesSearch && matchesTab) ? 'block' : 'none';
+            });
+        }
+
+        // Toggle individual card collapse
+        function toggleApiCard(header) {
+            const body = header.nextElementSibling;
+            const chevron = header.querySelector('.api-chevron');
+            const isOpen = body.style.display !== 'none';
+            body.style.display = isOpen ? 'none' : 'block';
+            if (chevron) chevron.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
+        }
+
+        // Expand/collapse all visible cards
+        function toggleAllApiCards(expand) {
+            document.querySelectorAll('.api-endpoint-card').forEach(card => {
+                if (card.style.display === 'none') return;
+                const body = card.querySelector('.api-card-body');
+                const chevron = card.querySelector('.api-chevron');
+                if (body) body.style.display = expand ? 'block' : 'none';
+                if (chevron) chevron.style.transform = expand ? 'rotate(180deg)' : 'rotate(0deg)';
+            });
+        }
+
+        // Copy cURL command to clipboard
+        function copyApiCurl(event, method, path, queryParams, body) {
+            event.stopPropagation();
+            const base = window.location.origin;
+            let cmd = `curl -X ${method} "${base}${path}${queryParams ? '?' + queryParams : ''}"`;
+            cmd += ` \\\n  -H "Authorization: Bearer <your-token>"`;
+            if (body) cmd += ` \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify(body, null, 2)}'`;
+            navigator.clipboard.writeText(cmd).then(() => {
+                showNotification('cURL command copied!', 'success');
+            });
+        }
+
+        // Open Try It panel
+        function openTryIt(event, btn) {
+            event.stopPropagation();
+            const card = btn.closest('.api-endpoint-card');
+            const body = card.querySelector('.api-card-body');
+            const tryPanel = card.querySelector('.api-try-panel');
+            body.style.display = 'block';
+            const chevron = card.querySelector('.api-chevron');
+            if (chevron) chevron.style.transform = 'rotate(180deg)';
+            tryPanel.style.display = tryPanel.style.display === 'none' ? 'block' : 'none';
+        }
+
+        // Execute a Try It call
+        async function executeTryIt(panelEl) {
+            const method = panelEl.dataset.method;
+            const path = panelEl.dataset.path;
+            const paramsInput = panelEl.querySelector('.try-params');
+            const bodyInput = panelEl.querySelector('.try-body');
+            const responseEl = panelEl.querySelector('.try-response');
+
+            let url = path;
+            if (paramsInput && paramsInput.value) url += '?' + paramsInput.value;
+
+            const opts = { method };
+            if (bodyInput && bodyInput.value) {
+                opts.headers = { 'Content-Type': 'application/json' };
+                opts.body = bodyInput.value;
+            }
+
+            responseEl.textContent = 'Loading...';
+            try {
+                const res = await fetchWithAuth(url, opts);
+                const text = await res.text();
+                let formatted = text;
+                try { formatted = JSON.stringify(JSON.parse(text), null, 2); } catch(e) {}
+                responseEl.textContent = `HTTP ${res.status}\n\n${formatted}`;
+            } catch(e) {
+                responseEl.textContent = 'Error: ' + e.message;
+            }
+        }
+
+        // Event delegation for API Docs tab buttons
+        document.addEventListener('click', function(e) {
+            const tabBtn = e.target.closest('.api-tab-btn');
+            if (tabBtn) switchApiTab(tabBtn.dataset.tab);
+        });
     </script>
 </div><!-- end appShell -->
 </body>
