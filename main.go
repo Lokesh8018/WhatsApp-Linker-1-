@@ -15,6 +15,7 @@ import (
 "io"
 "log"
 mathrand "math/rand"
+"net"
 "net/http"
 "os"
 "os/signal"
@@ -73,6 +74,9 @@ var jwtSecret []byte
 var statsDB *sql.DB
 
 var globalRateLimiter *ipRateLimiter
+
+var adminWhitelistIPs []string
+var adminWhitelistCIDRs []*net.IPNet
 
 type AutoConfig struct {
 Enabled            bool              `json:"enabled"`
@@ -310,6 +314,26 @@ a.LockedAt = time.Time{}
 return false
 }
 
+func isIPWhitelisted(ip string) bool {
+	if len(adminWhitelistIPs) == 0 && len(adminWhitelistCIDRs) == 0 {
+		return true
+	}
+	for _, entry := range adminWhitelistIPs {
+		if entry == ip {
+			return true
+		}
+	}
+	parsed := net.ParseIP(ip)
+	if parsed != nil {
+		for _, cidr := range adminWhitelistCIDRs {
+			if cidr.Contains(parsed) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func generateDeviceID() string {
 bytes := make([]byte, 16)
 rand.Read(bytes)
@@ -529,8 +553,18 @@ return err == nil && token.Valid
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 return func(w http.ResponseWriter, r *http.Request) {
 ip := r.RemoteAddr
-if idx := strings.LastIndex(ip, ":"); idx != -1 {
-ip = ip[:idx]
+if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+ip = strings.TrimSpace(strings.SplitN(fwd, ",", 2)[0])
+} else if host, _, err := net.SplitHostPort(ip); err == nil {
+ip = host
+}
+// IP whitelist check (must be first)
+if !isIPWhitelisted(ip) {
+addLog(fmt.Sprintf("Blocked request from non-whitelisted IP: %s", ip), "SECURITY")
+w.Header().Set("Content-Type", "application/json")
+w.WriteHeader(http.StatusForbidden)
+json.NewEncoder(w).Encode(APIResponse{Success: false, Message: "Access denied: IP not whitelisted"})
+return
 }
 // API key via X-API-Key header (checked before JWT/Basic, bypasses lockout for valid keys)
 if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
@@ -1216,6 +1250,22 @@ rateLimit = n
 }
 }
 globalRateLimiter = newIPRateLimiter(rateLimit)
+if wlEnv := os.Getenv("ADMIN_WHITELIST_IPS"); wlEnv != "" {
+for _, entry := range strings.Split(wlEnv, ",") {
+entry = strings.TrimSpace(entry)
+if entry == "" {
+continue
+}
+if strings.Contains(entry, "/") {
+if _, cidr, err := net.ParseCIDR(entry); err == nil {
+adminWhitelistCIDRs = append(adminWhitelistCIDRs, cidr)
+}
+} else {
+adminWhitelistIPs = append(adminWhitelistIPs, entry)
+}
+}
+addLog(fmt.Sprintf("🔒 IP whitelist enabled: %d IPs, %d CIDRs", len(adminWhitelistIPs), len(adminWhitelistCIDRs)), "SECURITY")
+}
 addLog("\U0001f680 SECURE WhatsApp Automation Server Started!", "SECURITY")
 addLog("\U0001f512 Anti-ban protection: ENABLED", "SECURITY")
 addLog("\U0001f6e1\ufe0f Security monitoring: ACTIVE", "SECURITY")

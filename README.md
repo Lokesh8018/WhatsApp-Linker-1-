@@ -41,6 +41,7 @@ The server starts on port `8080` by default.
 | `TLS_CERT_FILE`   | *(none)*   | Path to TLS certificate PEM file. When set together with `TLS_KEY_FILE`, the server serves HTTPS. |
 | `TLS_KEY_FILE`    | *(none)*   | Path to TLS private key PEM file.                              |
 | `RATE_LIMIT_RPM`  | `60`       | Maximum HTTP requests per minute per IP address.               |
+| `ADMIN_WHITELIST_IPS` | *(none)* | Comma-separated list of allowed IPs/CIDRs for admin access. Leave empty to allow all IPs. |
 
 > ⚠️ **Security:** Always set `ADMIN_USER`, `ADMIN_PASS`, and `JWT_SECRET` to strong values in production.
 
@@ -296,6 +297,22 @@ Failed login attempts are tracked per IP address:
 | GET | `/api/security/lockouts` | List all locked/attempted IPs |
 | DELETE | `/api/security/lockouts?ip=<ip>` | Unlock a specific IP |
 | DELETE | `/api/security/lockouts` | Clear all lockouts |
+
+---
+
+## Security Notes
+
+### IP Whitelist
+
+Set `ADMIN_WHITELIST_IPS` to restrict admin panel access to specific IP addresses or CIDR ranges:
+
+```
+ADMIN_WHITELIST_IPS=1.2.3.4,5.6.7.8,192.168.1.0/24
+```
+
+- If the variable is **empty or not set**, all IPs are allowed (backward-compatible).
+- If set, only listed IPs/CIDRs can access any auth-protected endpoint. All other IPs receive HTTP 403.
+- Works correctly behind reverse proxies (e.g. Render) by checking the `X-Forwarded-For` header.
 
 ---
 
